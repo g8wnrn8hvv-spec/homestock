@@ -1,4 +1,5 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import type { Point } from '../../types/space'
 import { spaces } from './spaces'
 import './HomeMap.css'
 
@@ -27,25 +28,74 @@ function getMidpoint(a: PointerEvent, b: PointerEvent) {
   return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 }
 }
 
+function roundedPolygonPath(points: Point[], radius: number) {
+  const corners = points.map((point, index) => {
+    const previous = points[(index - 1 + points.length) % points.length]
+    const next = points[(index + 1) % points.length]
+    const incomingLength = Math.hypot(previous.x - point.x, previous.y - point.y)
+    const outgoingLength = Math.hypot(next.x - point.x, next.y - point.y)
+    const cornerRadius = Math.min(radius, incomingLength / 2, outgoingLength / 2)
+
+    return {
+      point,
+      start: {
+        x: point.x + ((previous.x - point.x) / incomingLength) * cornerRadius,
+        y: point.y + ((previous.y - point.y) / incomingLength) * cornerRadius
+      },
+      end: {
+        x: point.x + ((next.x - point.x) / outgoingLength) * cornerRadius,
+        y: point.y + ((next.y - point.y) / outgoingLength) * cornerRadius
+      }
+    }
+  })
+
+  const commands = [`M ${corners[0].start.x} ${corners[0].start.y}`]
+  corners.forEach(({ point, start, end }, index) => {
+    if (index > 0) commands.push(`L ${start.x} ${start.y}`)
+    commands.push(`Q ${point.x} ${point.y} ${end.x} ${end.y}`)
+  })
+  commands.push(`L ${corners[0].start.x} ${corners[0].start.y}`, 'Z')
+  return commands.join(' ')
+}
+
 export function HomeMap() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
+  const appliedTransformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const pointersRef = useRef(new Map<number, PointerEvent>())
   const gestureRef = useRef<Gesture | null>(null)
   const frameRef = useRef<number | null>(null)
+  const pendingTransformRef = useRef<Transform | null>(null)
   const movedRef = useRef(false)
 
   const renderTransform = (next: Transform) => {
     transformRef.current = next
-    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+    pendingTransformRef.current = next
+    if (frameRef.current !== null) return
     frameRef.current = requestAnimationFrame(() => {
-      if (stageRef.current) {
+      const pending = pendingTransformRef.current
+      if (stageRef.current && pending) {
         stageRef.current.style.transform =
-          `translate3d(${next.x}px, ${next.y}px, 0) scale3d(${next.scale}, ${next.scale}, 1)`
+          `translate3d(${pending.x}px, ${pending.y}px, 0) scale3d(${pending.scale}, ${pending.scale}, 1)`
+        appliedTransformRef.current = pending
       }
+      pendingTransformRef.current = null
       frameRef.current = null
     })
+  }
+
+  const toStageCoordinates = (point: Point) => {
+    const stage = stageRef.current
+    if (!stage) return point
+    const stageRect = stage.getBoundingClientRect()
+    const transform = appliedTransformRef.current
+    const untransformedLeft = stageRect.left - transform.x
+    const untransformedTop = stageRect.top - transform.y
+    return {
+      x: point.x - untransformedLeft,
+      y: point.y - untransformedTop
+    }
   }
 
   const beginGesture = () => {
@@ -58,9 +108,10 @@ export function HomeMap() {
         transform: { ...transformRef.current }
       }
     } else if (active.length === 2) {
+      const center = getMidpoint(active[0], active[1])
       gestureRef.current = {
         kind: 'pinch',
-        origin: getMidpoint(active[0], active[1]),
+        origin: toStageCoordinates(center),
         distance: getDistance(active[0], active[1]),
         transform: { ...transformRef.current }
       }
@@ -93,7 +144,7 @@ export function HomeMap() {
     }
 
     if (active.length === 2 && gesture.kind === 'pinch') {
-      const currentMidpoint = getMidpoint(active[0], active[1])
+      const currentMidpoint = toStageCoordinates(getMidpoint(active[0], active[1]))
       const rawScale = gesture.transform.scale * (getDistance(active[0], active[1]) / gesture.distance)
       const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, rawScale))
       const scaleRatio = nextScale / gesture.transform.scale
@@ -136,7 +187,7 @@ export function HomeMap() {
                 <path
                   aria-label={space.name}
                   className={selectedId === space.id ? 'room selected' : 'room'}
-                  d={space.path}
+                  d={roundedPolygonPath(space.geometry.points, space.geometry.cornerRadius)}
                   fill={space.color}
                   key={space.id}
                   onClick={() => selectSpace(space.id)}
