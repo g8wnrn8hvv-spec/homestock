@@ -19,25 +19,26 @@
 
 .map-stage {
   transform-origin: center;
-  transition: transform 80ms linear;
+  backface-visibility: hidden;
+  contain: layout paint style;
+  transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
   width: min(100%, 470px);
   will-change: transform;
 }
 
 .home-map {
   display: block;
-  filter: drop-shadow(0 14px 32px rgba(62, 59, 54, 0.045));
   overflow: visible;
+  shape-rendering: geometricPrecision;
+  transform: translateZ(0);
   width: 100%;
 }
 
 .room {
   cursor: pointer;
-  stroke: #aaa49e;
-  stroke-linejoin: round;
-  stroke-width: 3;
-  transition: filter 180ms ease, opacity 180ms ease, stroke 180ms ease, stroke-width 180ms ease;
-  vector-effect: non-scaling-stroke;
+  outline: none;
+  stroke: none;
+  transition: filter 160ms ease;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -45,15 +46,8 @@
   outline: none;
 }
 
-.map-rooms:has(.selected) .room:not(.selected) {
-  filter: saturate(0.82);
-  opacity: 0.68;
-}
-
 .room.selected {
-  filter: saturate(1.1) brightness(0.97) drop-shadow(0 5px 8px rgba(79, 76, 70, 0.12));
-  stroke: #68645f;
-  stroke-width: 4.5;
+  filter: brightness(0.87) saturate(1.04);
 }
 
 .gesture-hint {
@@ -67,11 +61,6 @@
   margin: 5px 0 0;
 }
 
-.gesture-icon {
-  font-size: 17px;
-  transform: rotate(-20deg);
-}
-
 @media (min-width: 600px) {
   .map-stage {
     width: min(72vh, 520px);
@@ -79,7 +68,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .map-stage,
   .room {
     transition: none;
   }

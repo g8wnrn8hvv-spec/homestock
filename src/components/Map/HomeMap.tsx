@@ -9,64 +9,115 @@ interface Transform {
 }
 
 interface Gesture {
+  kind: 'pan' | 'pinch'
+  origin: { x: number; y: number }
   distance: number
-  midpoint: { x: number; y: number }
   transform: Transform
 }
 
 const MIN_SCALE = 0.85
 const MAX_SCALE = 2.8
+const DRAG_THRESHOLD = 6
 
-function distance(a: PointerEvent, b: PointerEvent) {
+function getDistance(a: PointerEvent, b: PointerEvent) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
 }
 
-function midpoint(a: PointerEvent, b: PointerEvent) {
+function getMidpoint(a: PointerEvent, b: PointerEvent) {
   return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 }
 }
 
 export function HomeMap() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 })
-  const pointers = useRef(new Map<number, PointerEvent>())
-  const gesture = useRef<Gesture | null>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
+  const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
+  const pointersRef = useRef(new Map<number, PointerEvent>())
+  const gestureRef = useRef<Gesture | null>(null)
+  const frameRef = useRef<number | null>(null)
+  const movedRef = useRef(false)
+
+  const renderTransform = (next: Transform) => {
+    transformRef.current = next
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+    frameRef.current = requestAnimationFrame(() => {
+      if (stageRef.current) {
+        stageRef.current.style.transform =
+          `translate3d(${next.x}px, ${next.y}px, 0) scale3d(${next.scale}, ${next.scale}, 1)`
+      }
+      frameRef.current = null
+    })
+  }
 
   const beginGesture = () => {
-    const active = [...pointers.current.values()]
-    if (active.length !== 2) return
-    gesture.current = {
-      distance: distance(active[0], active[1]),
-      midpoint: midpoint(active[0], active[1]),
-      transform
+    const active = [...pointersRef.current.values()]
+    if (active.length === 1) {
+      gestureRef.current = {
+        kind: 'pan',
+        origin: { x: active[0].clientX, y: active[0].clientY },
+        distance: 0,
+        transform: { ...transformRef.current }
+      }
+    } else if (active.length === 2) {
+      gestureRef.current = {
+        kind: 'pinch',
+        origin: getMidpoint(active[0], active[1]),
+        distance: getDistance(active[0], active[1]),
+        transform: { ...transformRef.current }
+      }
     }
   }
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId)
-    pointers.current.set(event.pointerId, event.nativeEvent)
-    if (pointers.current.size === 2) beginGesture()
+    pointersRef.current.set(event.pointerId, event.nativeEvent)
+    if (pointersRef.current.size === 1) movedRef.current = false
+    beginGesture()
   }
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!pointers.current.has(event.pointerId)) return
-    pointers.current.set(event.pointerId, event.nativeEvent)
-    const active = [...pointers.current.values()]
-    if (active.length !== 2 || !gesture.current) return
+    if (!pointersRef.current.has(event.pointerId) || !gestureRef.current) return
+    pointersRef.current.set(event.pointerId, event.nativeEvent)
+    const active = [...pointersRef.current.values()]
+    const gesture = gestureRef.current
 
-    const currentMidpoint = midpoint(active[0], active[1])
-    const ratio = distance(active[0], active[1]) / gesture.current.distance
-    const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, gesture.current.transform.scale * ratio))
-    setTransform({
-      x: gesture.current.transform.x + currentMidpoint.x - gesture.current.midpoint.x,
-      y: gesture.current.transform.y + currentMidpoint.y - gesture.current.midpoint.y,
-      scale: nextScale
-    })
+    if (active.length === 1 && gesture.kind === 'pan') {
+      const dx = active[0].clientX - gesture.origin.x
+      const dy = active[0].clientY - gesture.origin.y
+      if (Math.hypot(dx, dy) > DRAG_THRESHOLD) movedRef.current = true
+      renderTransform({
+        x: gesture.transform.x + dx,
+        y: gesture.transform.y + dy,
+        scale: gesture.transform.scale
+      })
+      return
+    }
+
+    if (active.length === 2 && gesture.kind === 'pinch') {
+      const currentMidpoint = getMidpoint(active[0], active[1])
+      const rawScale = gesture.transform.scale * (getDistance(active[0], active[1]) / gesture.distance)
+      const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, rawScale))
+      const scaleRatio = nextScale / gesture.transform.scale
+      movedRef.current = true
+      renderTransform({
+        x: currentMidpoint.x - (gesture.origin.x - gesture.transform.x) * scaleRatio,
+        y: currentMidpoint.y - (gesture.origin.y - gesture.transform.y) * scaleRatio,
+        scale: nextScale
+      })
+    }
   }
 
   const handlePointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
-    pointers.current.delete(event.pointerId)
-    gesture.current = null
-    if (pointers.current.size === 2) beginGesture()
+    pointersRef.current.delete(event.pointerId)
+    gestureRef.current = null
+    if (pointersRef.current.size > 0) beginGesture()
+  }
+
+  const selectSpace = (spaceId: string) => {
+    if (movedRef.current) {
+      movedRef.current = false
+      return
+    }
+    setSelectedId((current) => current === spaceId ? null : spaceId)
   }
 
   return (
@@ -78,10 +129,7 @@ export function HomeMap() {
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
       >
-        <div
-          className="map-stage"
-          style={{ transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})` }}
-        >
+        <div className="map-stage" ref={stageRef}>
           <svg className="home-map" viewBox="0 0 560 640" role="img" aria-label="HomeStock 공간 지도">
             <g className="map-rooms">
               {spaces.map((space) => (
@@ -91,7 +139,7 @@ export function HomeMap() {
                   d={space.path}
                   fill={space.color}
                   key={space.id}
-                  onClick={() => setSelectedId((current) => current === space.id ? null : space.id)}
+                  onClick={() => selectSpace(space.id)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(event) => {
@@ -107,8 +155,7 @@ export function HomeMap() {
         </div>
       </div>
       <p className="gesture-hint" aria-hidden="true">
-        <span className="gesture-icon">⌁</span>
-        두 손가락으로 지도를 움직여보세요
+        한 손가락으로 이동 · 두 손가락으로 확대
       </p>
     </section>
   )
