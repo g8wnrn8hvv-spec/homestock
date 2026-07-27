@@ -5,6 +5,7 @@
   min-height: 0;
   overflow: hidden;
   padding: 0 12px calc(env(safe-area-inset-bottom) + 20px);
+  position: relative;
 }
 
 .map-viewport {
@@ -24,6 +25,10 @@
   transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
   width: min(100%, 470px);
   will-change: transform;
+}
+
+.map-stage--animating {
+  transition: transform 280ms cubic-bezier(0.22, 0.72, 0.24, 1);
 }
 
 .home-map {
@@ -61,6 +66,55 @@
   margin: 5px 0 0;
 }
 
+.map-actions {
+  bottom: calc(env(safe-area-inset-bottom) + 68px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+  position: absolute;
+  right: 22px;
+  z-index: 3;
+}
+
+.fit-map-button {
+  align-items: center;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(67, 67, 63, 0.07);
+  border-radius: 50%;
+  box-shadow: 0 4px 16px rgba(54, 52, 48, 0.1), 0 1px 3px rgba(54, 52, 48, 0.06);
+  color: #666560;
+  display: flex;
+  height: 46px;
+  justify-content: center;
+  padding: 0;
+  pointer-events: auto;
+  transition: background-color 140ms ease, transform 100ms ease;
+  width: 46px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fit-map-button svg {
+  fill: none;
+  height: 21px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.55;
+  width: 21px;
+}
+
+.fit-map-button:active {
+  background: rgba(242, 242, 239, 0.96);
+  transform: scale(0.92);
+}
+
+.fit-map-button:focus-visible {
+  outline: 2px solid rgba(92, 112, 153, 0.35);
+  outline-offset: 3px;
+}
+
 @media (min-width: 600px) {
   .map-stage {
     width: min(72vh, 520px);
@@ -68,6 +122,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .map-stage--animating,
   .room {
     transition: none;
   }

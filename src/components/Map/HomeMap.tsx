@@ -1,5 +1,12 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { Point } from '../../types/space'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent
+} from 'react'
+import type { Point, Space } from '../../types/space'
 import { spaces } from './spaces'
 import './HomeMap.css'
 
@@ -11,14 +18,30 @@ interface Transform {
 
 interface Gesture {
   kind: 'pan' | 'pinch'
-  origin: { x: number; y: number }
+  origin: Point
   distance: number
   transform: Transform
 }
 
-const MIN_SCALE = 0.85
-const MAX_SCALE = 2.8
-const DRAG_THRESHOLD = 6
+interface MapMetrics {
+  fitScale: number
+  maxScale: number
+  stageHeight: number
+  stageWidth: number
+  viewportHeight: number
+  viewportWidth: number
+}
+
+interface StoredMapView extends Transform {
+  version: 1
+}
+
+const STORAGE_KEY = 'homestock:map-view'
+const STORAGE_VERSION = 1
+const VIEW_PADDING = 20
+const FOCUS_PADDING = 36
+const DRAG_THRESHOLD = 7
+const ANIMATION_DURATION = 280
 
 function getDistance(a: PointerEvent, b: PointerEvent) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
@@ -58,18 +81,77 @@ function roundedPolygonPath(points: Point[], radius: number) {
   return commands.join(' ')
 }
 
+function getBounds(space: Space) {
+  const xs = space.geometry.points.map(({ x }) => x)
+  const ys = space.geometry.points.map(({ y }) => y)
+  const left = Math.min(...xs)
+  const right = Math.max(...xs)
+  const top = Math.min(...ys)
+  const bottom = Math.max(...ys)
+  return { left, right, top, bottom, width: right - left, height: bottom - top }
+}
+
 export function HomeMap() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const appliedTransformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const pointersRef = useRef(new Map<number, PointerEvent>())
   const gestureRef = useRef<Gesture | null>(null)
   const frameRef = useRef<number | null>(null)
+  const animationTimerRef = useRef<number | null>(null)
   const pendingTransformRef = useRef<Transform | null>(null)
   const movedRef = useRef(false)
+  const initializedRef = useRef(false)
 
-  const renderTransform = (next: Transform) => {
+  const getMetrics = useCallback((): MapMetrics | null => {
+    const viewport = viewportRef.current
+    const stage = stageRef.current
+    if (!viewport || !stage) return null
+
+    const viewportWidth = viewport.clientWidth
+    const viewportHeight = viewport.clientHeight
+    const stageWidth = stage.offsetWidth
+    const stageHeight = stage.offsetHeight
+    if (!viewportWidth || !viewportHeight || !stageWidth || !stageHeight) return null
+
+    const fitScale = Math.min(
+      1,
+      (viewportWidth - VIEW_PADDING * 2) / stageWidth,
+      (viewportHeight - VIEW_PADDING * 2) / stageHeight
+    )
+
+    return {
+      fitScale,
+      maxScale: Math.min(4, Math.max(2.5, fitScale * 3.25)),
+      stageHeight,
+      stageWidth,
+      viewportHeight,
+      viewportWidth
+    }
+  }, [])
+
+  const getFitTransform = useCallback((): Transform | null => {
+    const metrics = getMetrics()
+    if (!metrics) return null
+    return {
+      x: (metrics.stageWidth - metrics.stageWidth * metrics.fitScale) / 2,
+      y: (metrics.stageHeight - metrics.stageHeight * metrics.fitScale) / 2,
+      scale: metrics.fitScale
+    }
+  }, [getMetrics])
+
+  const persistTransform = useCallback((transform: Transform) => {
+    try {
+      const stored: StoredMapView = { version: STORAGE_VERSION, ...transform }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
+    } catch {
+      // Private browsing or storage limits must never block map interaction.
+    }
+  }, [])
+
+  const applyTransform = useCallback((next: Transform) => {
     transformRef.current = next
     pendingTransformRef.current = next
     if (frameRef.current !== null) return
@@ -83,20 +165,101 @@ export function HomeMap() {
       pendingTransformRef.current = null
       frameRef.current = null
     })
-  }
+  }, [])
 
-  const toStageCoordinates = (point: Point) => {
+  const stopAnimation = useCallback(() => {
+    const stage = stageRef.current
+    if (!stage || !stage.classList.contains('map-stage--animating')) return
+
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(stage).transform)
+    const current = { x: matrix.e, y: matrix.f, scale: matrix.a }
+    stage.classList.remove('map-stage--animating')
+    stage.style.transform =
+      `translate3d(${current.x}px, ${current.y}px, 0) scale3d(${current.scale}, ${current.scale}, 1)`
+    transformRef.current = current
+    appliedTransformRef.current = current
+    pendingTransformRef.current = null
+    if (animationTimerRef.current !== null) window.clearTimeout(animationTimerRef.current)
+    animationTimerRef.current = null
+  }, [])
+
+  const animateTransform = useCallback((next: Transform) => {
+    const stage = stageRef.current
+    if (!stage) return
+    stopAnimation()
+    transformRef.current = next
+    stage.classList.add('map-stage--animating')
+    requestAnimationFrame(() => {
+      stage.style.transform =
+        `translate3d(${next.x}px, ${next.y}px, 0) scale3d(${next.scale}, ${next.scale}, 1)`
+      appliedTransformRef.current = next
+    })
+    animationTimerRef.current = window.setTimeout(() => {
+      stage.classList.remove('map-stage--animating')
+      animationTimerRef.current = null
+      persistTransform(next)
+    }, ANIMATION_DURATION + 40)
+  }, [persistTransform, stopAnimation])
+
+  const toStageCoordinates = useCallback((point: Point) => {
     const stage = stageRef.current
     if (!stage) return point
     const stageRect = stage.getBoundingClientRect()
-    const transform = appliedTransformRef.current
-    const untransformedLeft = stageRect.left - transform.x
-    const untransformedTop = stageRect.top - transform.y
+    const applied = appliedTransformRef.current
     return {
-      x: point.x - untransformedLeft,
-      y: point.y - untransformedTop
+      x: point.x - (stageRect.left - applied.x),
+      y: point.y - (stageRect.top - applied.y)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    const initialize = () => {
+      const metrics = getMetrics()
+      const fallback = getFitTransform()
+      if (!metrics || !fallback) return
+
+      let initial = fallback
+      try {
+        const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '') as Partial<StoredMapView>
+        const isFiniteTransform =
+          Number.isFinite(stored.x) && Number.isFinite(stored.y) && Number.isFinite(stored.scale)
+        const isCompatible =
+          stored.version === STORAGE_VERSION &&
+          isFiniteTransform &&
+          stored.scale! >= metrics.fitScale &&
+          stored.scale! <= metrics.maxScale &&
+          Math.abs(stored.x!) <= metrics.stageWidth * metrics.maxScale * 2 &&
+          Math.abs(stored.y!) <= metrics.stageHeight * metrics.maxScale * 2
+
+        if (isCompatible) {
+          initial = { x: stored.x!, y: stored.y!, scale: stored.scale! }
+        }
+      } catch {
+        localStorage.removeItem(STORAGE_KEY)
+      }
+
+      applyTransform(initial)
+      initializedRef.current = true
+    }
+
+    const frame = requestAnimationFrame(initialize)
+    const observer = new ResizeObserver(() => {
+      if (!initializedRef.current) return
+      const metrics = getMetrics()
+      const current = transformRef.current
+      if (!metrics || (current.scale >= metrics.fitScale && current.scale <= metrics.maxScale)) return
+      const fallback = getFitTransform()
+      if (fallback) applyTransform(fallback)
+    })
+    if (viewportRef.current) observer.observe(viewportRef.current)
+
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+      if (animationTimerRef.current !== null) window.clearTimeout(animationTimerRef.current)
+    }
+  }, [applyTransform, getFitTransform, getMetrics])
 
   const beginGesture = () => {
     const active = [...pointersRef.current.values()]
@@ -108,10 +271,9 @@ export function HomeMap() {
         transform: { ...transformRef.current }
       }
     } else if (active.length === 2) {
-      const center = getMidpoint(active[0], active[1])
       gestureRef.current = {
         kind: 'pinch',
-        origin: toStageCoordinates(center),
+        origin: toStageCoordinates(getMidpoint(active[0], active[1])),
         distance: getDistance(active[0], active[1]),
         transform: { ...transformRef.current }
       }
@@ -119,6 +281,7 @@ export function HomeMap() {
   }
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    stopAnimation()
     event.currentTarget.setPointerCapture(event.pointerId)
     pointersRef.current.set(event.pointerId, event.nativeEvent)
     if (pointersRef.current.size === 1) movedRef.current = false
@@ -135,7 +298,7 @@ export function HomeMap() {
       const dx = active[0].clientX - gesture.origin.x
       const dy = active[0].clientY - gesture.origin.y
       if (Math.hypot(dx, dy) > DRAG_THRESHOLD) movedRef.current = true
-      renderTransform({
+      applyTransform({
         x: gesture.transform.x + dx,
         y: gesture.transform.y + dy,
         scale: gesture.transform.scale
@@ -144,12 +307,14 @@ export function HomeMap() {
     }
 
     if (active.length === 2 && gesture.kind === 'pinch') {
+      const metrics = getMetrics()
+      if (!metrics) return
       const currentMidpoint = toStageCoordinates(getMidpoint(active[0], active[1]))
       const rawScale = gesture.transform.scale * (getDistance(active[0], active[1]) / gesture.distance)
-      const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, rawScale))
+      const nextScale = Math.min(metrics.maxScale, Math.max(metrics.fitScale, rawScale))
       const scaleRatio = nextScale / gesture.transform.scale
       movedRef.current = true
-      renderTransform({
+      applyTransform({
         x: currentMidpoint.x - (gesture.origin.x - gesture.transform.x) * scaleRatio,
         y: currentMidpoint.y - (gesture.origin.y - gesture.transform.y) * scaleRatio,
         scale: nextScale
@@ -160,25 +325,74 @@ export function HomeMap() {
   const handlePointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
     pointersRef.current.delete(event.pointerId)
     gestureRef.current = null
-    if (pointersRef.current.size > 0) beginGesture()
+    if (pointersRef.current.size > 0) {
+      beginGesture()
+    } else {
+      persistTransform(transformRef.current)
+    }
   }
 
-  const selectSpace = (spaceId: string) => {
-    if (movedRef.current) {
-      movedRef.current = false
-      return
-    }
-    setSelectedId((current) => current === spaceId ? null : spaceId)
+  const focusSpace = (space: Space) => {
+    if (selectedId === space.id) return
+    setSelectedId(space.id)
+
+    const metrics = getMetrics()
+    const viewport = viewportRef.current
+    const stage = stageRef.current
+    if (!metrics || !viewport || !stage) return
+
+    const bounds = getBounds(space)
+    const unitScale = metrics.stageWidth / 560
+    const roomFitScale = Math.min(
+      (metrics.viewportWidth - FOCUS_PADDING * 2) / (bounds.width * unitScale),
+      (metrics.viewportHeight - FOCUS_PADDING * 2) / (bounds.height * unitScale),
+      metrics.maxScale
+    )
+    const readableScale = Math.min(
+      metrics.maxScale,
+      Math.max(metrics.fitScale, 116 / (Math.min(bounds.width, bounds.height) * unitScale))
+    )
+    const nextScale = Math.min(roomFitScale, Math.max(transformRef.current.scale, readableScale))
+    const stageRect = stage.getBoundingClientRect()
+    const applied = appliedTransformRef.current
+    const baseLeft = stageRect.left - applied.x
+    const baseTop = stageRect.top - applied.y
+    const viewportRect = viewport.getBoundingClientRect()
+    const targetX = viewportRect.left + metrics.viewportWidth / 2 - baseLeft
+    const targetY = viewportRect.top + metrics.viewportHeight / 2 - baseTop
+    const roomCenterX = ((bounds.left + bounds.right) / 2) * unitScale
+    const roomCenterY = ((bounds.top + bounds.bottom) / 2) * unitScale
+
+    animateTransform({
+      x: targetX - roomCenterX * nextScale,
+      y: targetY - roomCenterY * nextScale,
+      scale: nextScale
+    })
+  }
+
+  const handleMapClick = (event: MouseEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest('.room')) return
+    if (movedRef.current) return
+    setSelectedId(null)
+  }
+
+  const showFullMap = () => {
+    const fit = getFitTransform()
+    if (!fit) return
+    setSelectedId(null)
+    animateTransform(fit)
   }
 
   return (
     <section className="map-section" aria-label="집 공간 지도">
       <div
         className="map-viewport"
+        onClick={handleMapClick}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
+        ref={viewportRef}
       >
         <div className="map-stage" ref={stageRef}>
           <svg className="home-map" viewBox="0 0 560 640" role="img" aria-label="HomeStock 공간 지도">
@@ -190,13 +404,16 @@ export function HomeMap() {
                   d={roundedPolygonPath(space.geometry.points, space.geometry.cornerRadius)}
                   fill={space.color}
                   key={space.id}
-                  onClick={() => selectSpace(space.id)}
+                  onClick={() => {
+                    if (movedRef.current) return
+                    focusSpace(space)
+                  }}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
-                      setSelectedId((current) => current === space.id ? null : space.id)
+                      focusSpace(space)
                     }
                   }}
                 />
@@ -204,6 +421,20 @@ export function HomeMap() {
             </g>
           </svg>
         </div>
+      </div>
+      <div className="map-actions">
+        <button
+          className="fit-map-button"
+          type="button"
+          aria-label="집 전체 지도 보기"
+          onClick={showFullMap}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M4.5 10.5 12 4.4l7.5 6.1v7.1a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2Z" />
+            <path d="M9.2 19.6v-5.4h5.6v5.4" />
+          </svg>
+        </button>
       </div>
       <p className="gesture-hint" aria-hidden="true">
         한 손가락으로 이동 · 두 손가락으로 확대
