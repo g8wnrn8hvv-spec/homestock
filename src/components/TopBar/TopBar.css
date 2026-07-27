@@ -1,0 +1,29 @@
+.top-bar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: calc(env(safe-area-inset-top) + 18px) 22px 12px;
+  position: relative;
+  z-index: 2;
+}
+
+.top-bar h1 {
+  color: #42423f;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.top-bar button {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(65, 65, 61, 0.08);
+  border-radius: 999px;
+  color: #686865;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 590;
+  padding: 7px 12px;
+  -webkit-tap-highlight-color: transparent;
+}

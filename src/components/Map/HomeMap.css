@@ -1,0 +1,86 @@
+.map-section {
+  display: grid;
+  flex: 1;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 12px calc(env(safe-area-inset-bottom) + 20px);
+}
+
+.map-viewport {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.map-stage {
+  transform-origin: center;
+  transition: transform 80ms linear;
+  width: min(100%, 470px);
+  will-change: transform;
+}
+
+.home-map {
+  display: block;
+  filter: drop-shadow(0 14px 32px rgba(62, 59, 54, 0.045));
+  overflow: visible;
+  width: 100%;
+}
+
+.room {
+  cursor: pointer;
+  stroke: #aaa49e;
+  stroke-linejoin: round;
+  stroke-width: 3;
+  transition: filter 180ms ease, opacity 180ms ease, stroke 180ms ease, stroke-width 180ms ease;
+  vector-effect: non-scaling-stroke;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.room:focus {
+  outline: none;
+}
+
+.map-rooms:has(.selected) .room:not(.selected) {
+  filter: saturate(0.82);
+  opacity: 0.68;
+}
+
+.room.selected {
+  filter: saturate(1.1) brightness(0.97) drop-shadow(0 5px 8px rgba(79, 76, 70, 0.12));
+  stroke: #68645f;
+  stroke-width: 4.5;
+}
+
+.gesture-hint {
+  align-items: center;
+  color: #92918d;
+  display: flex;
+  font-size: 11px;
+  gap: 6px;
+  justify-content: center;
+  letter-spacing: -0.02em;
+  margin: 5px 0 0;
+}
+
+.gesture-icon {
+  font-size: 17px;
+  transform: rotate(-20deg);
+}
+
+@media (min-width: 600px) {
+  .map-stage {
+    width: min(72vh, 520px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-stage,
+  .room {
+    transition: none;
+  }
+}
