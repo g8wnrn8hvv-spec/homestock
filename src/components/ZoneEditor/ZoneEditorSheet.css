@@ -1,0 +1,194 @@
+.zone-editor-sheet {
+  background: rgba(250, 250, 249, 0.98);
+  border: 1px solid rgba(65, 65, 61, 0.07);
+  border-radius: 22px 22px 0 0;
+  bottom: 0;
+  box-shadow: 0 -8px 30px rgba(48, 47, 44, 0.1);
+  color: #454542;
+  left: 50%;
+  max-height: min(44dvh, 350px);
+  max-width: 560px;
+  overflow-y: auto;
+  padding: 9px 20px calc(env(safe-area-inset-bottom) + 14px);
+  position: fixed;
+  touch-action: pan-y;
+  transform: translateX(-50%);
+  width: min(100%, 560px);
+  z-index: 10;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sheet-handle {
+  background: #d7d6d2;
+  border-radius: 999px;
+  height: 4px;
+  margin: 0 auto 10px;
+  width: 34px;
+}
+
+.sheet-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.sheet-eyebrow,
+.name-field > span,
+.color-field legend {
+  color: #8a8985;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.sheet-heading h2 {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  margin: 2px 0 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.current-color {
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(67, 67, 63, 0.09);
+  height: 31px;
+  width: 31px;
+}
+
+.name-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  margin-bottom: 12px;
+}
+
+.name-field input {
+  appearance: none;
+  background: #f0f0ed;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: #3f3f3c;
+  font: inherit;
+  font-size: 15px;
+  grid-column: 1 / -1;
+  margin-top: 5px;
+  min-height: 42px;
+  outline: none;
+  padding: 9px 42px 9px 12px;
+}
+
+.name-field input:focus {
+  background: #fff;
+  border-color: rgba(103, 112, 137, 0.26);
+  box-shadow: 0 0 0 3px rgba(103, 112, 137, 0.08);
+}
+
+.name-field small {
+  align-self: end;
+  color: #aaa9a5;
+  font-size: 10px;
+  grid-column: 2;
+  margin: 0 10px 12px 0;
+  pointer-events: none;
+}
+
+.color-field {
+  border: 0;
+  margin: 0 0 14px;
+  padding: 0;
+}
+
+.color-field legend {
+  margin-bottom: 7px;
+}
+
+.color-palette {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(8, 1fr);
+}
+
+.color-option {
+  align-items: center;
+  appearance: none;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  color: #5f5e5a;
+  display: flex;
+  height: 32px;
+  justify-content: center;
+  min-width: 32px;
+  padding: 0;
+  transition: transform 100ms ease, box-shadow 120ms ease;
+  width: 32px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.color-option span {
+  font-size: 13px;
+  opacity: 0;
+}
+
+.color-option[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(76, 75, 71, 0.45);
+}
+
+.color-option[aria-pressed="true"] span {
+  opacity: 1;
+}
+
+.color-option:active {
+  transform: scale(0.9);
+}
+
+.sheet-actions {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.sheet-actions button {
+  appearance: none;
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 620;
+  min-height: 42px;
+}
+
+.cancel-button {
+  background: #ececea;
+  color: #666560;
+}
+
+.save-button {
+  background: #51514e;
+  color: #fff;
+}
+
+.save-button:disabled {
+  opacity: 0.36;
+}
+
+@media (max-width: 360px) {
+  .zone-editor-sheet {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .color-palette {
+    gap: 6px;
+  }
+
+  .color-option {
+    height: 30px;
+    min-width: 30px;
+    width: 30px;
+  }
+}

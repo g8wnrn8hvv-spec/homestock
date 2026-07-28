@@ -24,6 +24,18 @@
   font: inherit;
   font-size: 13px;
   font-weight: 590;
-  padding: 7px 12px;
+  min-height: 36px;
+  min-width: 52px;
+  padding: 7px 13px;
+  transition: background-color 140ms ease, transform 100ms ease;
   -webkit-tap-highlight-color: transparent;
+}
+
+.top-bar button[aria-pressed="true"] {
+  background: #ecebea;
+  color: #464643;
+}
+
+.top-bar button:active {
+  transform: scale(0.95);
 }

@@ -1,12 +1,17 @@
 import type { Zone } from '../types/zone'
 import { zoneRepository, type ZoneRepository } from '../repositories/ZoneRepository'
 
+export const MAX_ZONE_NAME_LENGTH = 24
+
 export class ZoneService {
   constructor(private readonly repository: ZoneRepository) {}
 
   renameZone(id: string, name: string): Zone {
     const normalizedName = name.trim()
     if (!normalizedName) throw new Error('Zone name cannot be empty')
+    if (normalizedName.length > MAX_ZONE_NAME_LENGTH) {
+      throw new Error(`Zone name cannot exceed ${MAX_ZONE_NAME_LENGTH} characters`)
+    }
     return this.update(id, { name: normalizedName })
   }
 

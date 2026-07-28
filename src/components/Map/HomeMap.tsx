@@ -8,7 +8,12 @@ import {
 } from 'react'
 import { createDefaultZones } from '../../data/defaultZones'
 import { zoneRepository } from '../../repositories/ZoneRepository'
+import { MAX_ZONE_NAME_LENGTH, zoneService } from '../../services/ZoneService'
 import type { Point, Zone } from '../../types/zone'
+import {
+  ZoneEditorSheet,
+  type ZoneDraft
+} from '../ZoneEditor/ZoneEditorSheet'
 import './HomeMap.css'
 
 interface Transform {
@@ -92,9 +97,20 @@ function getBounds(zone: Zone) {
   return { left, right, top, bottom, width: right - left, height: bottom - top }
 }
 
-export function HomeMap() {
+function getZoneLabel(name: string, width: number) {
+  const maxCharacters = Math.max(2, Math.floor(width / 18))
+  return name.length > maxCharacters ? `${name.slice(0, maxCharacters)}…` : name
+}
+
+interface HomeMapProps {
+  isEditing: boolean
+}
+
+export function HomeMap({ isEditing }: HomeMapProps) {
   const [zones, setZones] = useState<Zone[]>(() => createDefaultZones())
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [draft, setDraft] = useState<ZoneDraft | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
@@ -162,6 +178,7 @@ export function HomeMap() {
       if (stageRef.current && pending) {
         stageRef.current.style.transform =
           `translate3d(${pending.x}px, ${pending.y}px, 0) scale3d(${pending.scale}, ${pending.scale}, 1)`
+        stageRef.current.style.setProperty('--label-inverse-scale', String(1 / pending.scale))
         appliedTransformRef.current = pending
       }
       pendingTransformRef.current = null
@@ -178,6 +195,7 @@ export function HomeMap() {
     stage.classList.remove('map-stage--animating')
     stage.style.transform =
       `translate3d(${current.x}px, ${current.y}px, 0) scale3d(${current.scale}, ${current.scale}, 1)`
+    stage.style.setProperty('--label-inverse-scale', String(1 / current.scale))
     transformRef.current = current
     appliedTransformRef.current = current
     pendingTransformRef.current = null
@@ -194,6 +212,7 @@ export function HomeMap() {
     requestAnimationFrame(() => {
       stage.style.transform =
         `translate3d(${next.x}px, ${next.y}px, 0) scale3d(${next.scale}, ${next.scale}, 1)`
+      stage.style.setProperty('--label-inverse-scale', String(1 / next.scale))
       appliedTransformRef.current = next
     })
     animationTimerRef.current = window.setTimeout(() => {
@@ -217,6 +236,12 @@ export function HomeMap() {
   useEffect(() => {
     setZones(zoneRepository.load())
   }, [])
+
+  useEffect(() => {
+    if (isEditing) return
+    setEditorOpen(false)
+    setDraft(null)
+  }, [isEditing])
 
   useEffect(() => {
     const initialize = () => {
@@ -348,6 +373,13 @@ export function HomeMap() {
         zone
       })
     }
+    if (isEditing) {
+      setSelectedId(zone.id)
+      setDraft({ name: zone.name, color: zone.color })
+      setEditorOpen(true)
+      return
+    }
+
     if (selectedId === zone.id) return
     setSelectedId(zone.id)
 
@@ -398,8 +430,37 @@ export function HomeMap() {
     animateTransform(fit)
   }
 
+  const cancelEditingZone = () => {
+    setEditorOpen(false)
+    setDraft(null)
+  }
+
+  const saveEditingZone = () => {
+    if (!selectedId || !draft) return
+    const current = zoneRepository.getZone(selectedId)
+    if (!current) {
+      cancelEditingZone()
+      return
+    }
+
+    const normalizedName = draft.name.trim()
+    if (!normalizedName) return
+    if (normalizedName !== current.name) zoneService.renameZone(selectedId, normalizedName)
+    if (draft.color.toUpperCase() !== current.color.toUpperCase()) {
+      zoneService.changeColor(selectedId, draft.color)
+    }
+    setZones(zoneRepository.getAllZones())
+    setEditorOpen(false)
+    setDraft(null)
+  }
+
+  const activeDraftZoneId = editorOpen ? selectedId : null
+
   return (
-    <section className="map-section" aria-label="집 공간 지도">
+    <section
+      className={editorOpen ? 'map-section map-section--editor-open' : 'map-section'}
+      aria-label="집 공간 지도"
+    >
       <div
         className="map-viewport"
         onClick={handleMapClick}
@@ -412,27 +473,44 @@ export function HomeMap() {
         <div className="map-stage" ref={stageRef}>
           <svg className="home-map" viewBox="0 0 560 640" role="img" aria-label="HomeStock 공간 지도">
             <g className="map-rooms">
-              {zones.filter((zone) => zone.visible).map((zone) => (
-                <path
-                  aria-label={zone.name}
-                  className={selectedId === zone.id ? 'room selected' : 'room'}
-                  d={roundedPolygonPath(zone.polygon.points, zone.polygon.cornerRadius)}
-                  fill={zone.color}
-                  key={zone.id}
-                  onClick={() => {
-                    if (movedRef.current) return
-                    focusZone(zone)
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      focusZone(zone)
-                    }
-                  }}
-                />
-              ))}
+              {zones.filter((zone) => zone.visible).map((zone) => {
+                const bounds = getBounds(zone)
+                const preview = activeDraftZoneId === zone.id && draft ? draft : null
+                const displayName = preview?.name.trim() || zone.name
+                const showLabel = bounds.width >= 78 && bounds.height >= 48
+                return (
+                  <g className="zone" key={zone.id}>
+                    <path
+                      aria-label={zone.name}
+                      className={selectedId === zone.id ? 'room selected' : 'room'}
+                      d={roundedPolygonPath(zone.polygon.points, zone.polygon.cornerRadius)}
+                      fill={preview?.color ?? zone.color}
+                      onClick={() => {
+                        if (movedRef.current) return
+                        focusZone(zone)
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          focusZone(zone)
+                        }
+                      }}
+                    />
+                    {showLabel && (
+                      <text
+                        aria-hidden="true"
+                        className={selectedId === zone.id ? 'zone-label selected' : 'zone-label'}
+                        x={(bounds.left + bounds.right) / 2}
+                        y={(bounds.top + bounds.bottom) / 2}
+                      >
+                        {getZoneLabel(displayName, bounds.width)}
+                      </text>
+                    )}
+                  </g>
+                )
+              })}
             </g>
           </svg>
         </div>
@@ -454,6 +532,15 @@ export function HomeMap() {
       <p className="gesture-hint" aria-hidden="true">
         한 손가락으로 이동 · 두 손가락으로 확대
       </p>
+      {isEditing && editorOpen && draft && (
+        <ZoneEditorSheet
+          draft={draft}
+          maxNameLength={MAX_ZONE_NAME_LENGTH}
+          onCancel={cancelEditingZone}
+          onChange={setDraft}
+          onSave={saveEditingZone}
+        />
+      )}
     </section>
   )
 }
