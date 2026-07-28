@@ -6,8 +6,9 @@ import {
   type MouseEvent,
   type PointerEvent as ReactPointerEvent
 } from 'react'
-import type { Point, Space } from '../../types/space'
-import { spaces } from './spaces'
+import { createDefaultZones } from '../../data/defaultZones'
+import { zoneRepository } from '../../repositories/ZoneRepository'
+import type { Point, Zone } from '../../types/zone'
 import './HomeMap.css'
 
 interface Transform {
@@ -81,9 +82,9 @@ function roundedPolygonPath(points: Point[], radius: number) {
   return commands.join(' ')
 }
 
-function getBounds(space: Space) {
-  const xs = space.geometry.points.map(({ x }) => x)
-  const ys = space.geometry.points.map(({ y }) => y)
+function getBounds(zone: Zone) {
+  const xs = zone.polygon.points.map(({ x }) => x)
+  const ys = zone.polygon.points.map(({ y }) => y)
   const left = Math.min(...xs)
   const right = Math.max(...xs)
   const top = Math.min(...ys)
@@ -92,6 +93,7 @@ function getBounds(space: Space) {
 }
 
 export function HomeMap() {
+  const [zones, setZones] = useState<Zone[]>(() => createDefaultZones())
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -210,6 +212,10 @@ export function HomeMap() {
       x: point.x - (stageRect.left - applied.x),
       y: point.y - (stageRect.top - applied.y)
     }
+  }, [])
+
+  useEffect(() => {
+    setZones(zoneRepository.load())
   }, [])
 
   useEffect(() => {
@@ -332,16 +338,25 @@ export function HomeMap() {
     }
   }
 
-  const focusSpace = (space: Space) => {
-    if (selectedId === space.id) return
-    setSelectedId(space.id)
+  const focusZone = (zone: Zone) => {
+    if (import.meta.env.DEV) {
+      console.info('[HomeStock Zone]', {
+        id: zone.id,
+        name: zone.name,
+        items: zone.items,
+        polygonPointCount: zone.polygon.points.length,
+        zone
+      })
+    }
+    if (selectedId === zone.id) return
+    setSelectedId(zone.id)
 
     const metrics = getMetrics()
     const viewport = viewportRef.current
     const stage = stageRef.current
     if (!metrics || !viewport || !stage) return
 
-    const bounds = getBounds(space)
+    const bounds = getBounds(zone)
     const unitScale = metrics.stageWidth / 560
     const roomFitScale = Math.min(
       (metrics.viewportWidth - FOCUS_PADDING * 2) / (bounds.width * unitScale),
@@ -397,23 +412,23 @@ export function HomeMap() {
         <div className="map-stage" ref={stageRef}>
           <svg className="home-map" viewBox="0 0 560 640" role="img" aria-label="HomeStock 공간 지도">
             <g className="map-rooms">
-              {spaces.map((space) => (
+              {zones.filter((zone) => zone.visible).map((zone) => (
                 <path
-                  aria-label={space.name}
-                  className={selectedId === space.id ? 'room selected' : 'room'}
-                  d={roundedPolygonPath(space.geometry.points, space.geometry.cornerRadius)}
-                  fill={space.color}
-                  key={space.id}
+                  aria-label={zone.name}
+                  className={selectedId === zone.id ? 'room selected' : 'room'}
+                  d={roundedPolygonPath(zone.polygon.points, zone.polygon.cornerRadius)}
+                  fill={zone.color}
+                  key={zone.id}
                   onClick={() => {
                     if (movedRef.current) return
-                    focusSpace(space)
+                    focusZone(zone)
                   }}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
-                      focusSpace(space)
+                      focusZone(zone)
                     }
                   }}
                 />
