@@ -20,7 +20,7 @@
 }
 
 .zone-editor-sheet--closing {
-  animation: sheet-exit 160ms ease-in forwards;
+  animation: sheet-exit 190ms ease-out forwards;
   pointer-events: none;
 }
 

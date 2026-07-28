@@ -33,6 +33,7 @@ interface Gesture {
   kind: 'pan' | 'pinch'
   origin: Point
   distance: number
+  startedAt: number
   transform: Transform
 }
 
@@ -42,6 +43,7 @@ interface ZoneGesture {
   start: Point
   points: Point[]
   bounds: ReturnType<typeof getBounds>
+  startedAt: number
 }
 
 interface DrawGesture {
@@ -69,14 +71,24 @@ const FOCUS_PADDING = 20
 const DETAIL_SHEET_CLEARANCE = 230
 const DRAG_THRESHOLD = 7
 const ANIMATION_DURATION = 280
-const EDITOR_CLOSE_DURATION = 160
+const EDITOR_CLOSE_DURATION = 190
 const MAP_WIDTH = 560
 const MAP_HEIGHT = 640
 const MIN_ZONE_SIZE = 80
 const MAX_ZONE_WIDTH = 520
 const MAX_ZONE_HEIGHT = 600
+const TAP_MAX_DURATION = 360
 
 type SheetMode = 'closed' | 'zoneDetail' | 'itemCreate' | 'itemEdit' | 'zoneEdit'
+type InteractionMode =
+  | 'idle'
+  | 'zoneMove'
+  | 'zoneResizeWidth'
+  | 'zoneResizeHeight'
+  | 'zoneResizeBoth'
+  | 'cameraPan'
+  | 'pinchZoom'
+  | 'zoneCreate'
 
 function getDistance(a: PointerEvent, b: PointerEvent) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
@@ -219,6 +231,12 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const editorCloseTimerRef = useRef<number | null>(null)
   const pendingTransformRef = useRef<Transform | null>(null)
   const movedRef = useRef(false)
+  const lastPointerDurationRef = useRef(0)
+  const lastPointerEndedAtRef = useRef(0)
+  const handledZoneTapAtRef = useRef(0)
+  const longTapEndedAtRef = useRef(0)
+  const dragEndedAtRef = useRef(0)
+  const interactionModeRef = useRef<InteractionMode>('idle')
   const initializedRef = useRef(false)
 
   useEffect(() => {
@@ -460,15 +478,19 @@ export function HomeMap({ isEditing }: HomeMapProps) {
         kind: 'pan',
         origin: { x: active[0].clientX, y: active[0].clientY },
         distance: 0,
+        startedAt: performance.now(),
         transform: { ...transformRef.current }
       }
+      interactionModeRef.current = 'cameraPan'
     } else if (active.length === 2) {
       gestureRef.current = {
         kind: 'pinch',
         origin: toStageCoordinates(getMidpoint(active[0], active[1])),
         distance: getDistance(active[0], active[1]),
+        startedAt: performance.now(),
         transform: { ...transformRef.current }
       }
+      interactionModeRef.current = 'pinchZoom'
     }
   }
 
@@ -520,7 +542,18 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       pointerId: event.pointerId,
       start: pointer,
       points: zone.polygon.points.map((point) => ({ ...point })),
-      bounds: getBounds(zone)
+      bounds: getBounds(zone),
+      startedAt: performance.now()
+    }
+    interactionModeRef.current = resolvedKind === 'move'
+      ? 'zoneMove'
+      : resolvedKind === 'resize-x'
+        ? 'zoneResizeWidth'
+        : resolvedKind === 'resize-y'
+          ? 'zoneResizeHeight'
+          : 'zoneResizeBoth'
+    if (resolvedKind !== 'move' && sheetModeRef.current === 'zoneEdit') {
+      closeEditor(false)
     }
     zonePointsRef.current = zone.polygon.points.map((point) => ({ ...point }))
     movedRef.current = false
@@ -534,7 +567,10 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     const current = clientToMapPoint(event.clientX, event.clientY)
     const dx = current.x - gesture.start.x
     const dy = current.y - gesture.start.y
-    if (Math.hypot(dx, dy) > DRAG_THRESHOLD) movedRef.current = true
+    if (Math.hypot(dx, dy) > DRAG_THRESHOLD && !movedRef.current) {
+      movedRef.current = true
+      if (sheetModeRef.current === 'zoneEdit') closeEditor(false)
+    }
     let points: Point[]
     if (gesture.kind === 'move') {
       const clampedDx = Math.min(
@@ -581,20 +617,39 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     zonePointsRef.current = points
   }
 
-  const endZoneGesture = (event: ReactPointerEvent<SVGElement>, zoneId: string) => {
+  const endZoneGesture = (
+    event: ReactPointerEvent<SVGElement>,
+    zone: Zone,
+    allowTap = true,
+  ) => {
     const gesture = zoneGestureRef.current
     if (!gesture || gesture.pointerId !== event.pointerId) return
     event.preventDefault()
     event.stopPropagation()
+    lastPointerDurationRef.current = performance.now() - gesture.startedAt
+    lastPointerEndedAtRef.current = performance.now()
+    if (movedRef.current) dragEndedAtRef.current = performance.now()
+    interactionModeRef.current = 'idle'
     zoneGestureRef.current = null
     const points = zonePointsRef.current
     zonePointsRef.current = null
     if (points) {
-      zoneService.updatePolygon(zoneId, points)
+      zoneService.updatePolygon(zone.id, points)
       const storedZones = zoneRepository.getAllZones()
       zonesRef.current = storedZones
       setZones(storedZones)
       applyTransform(transformRef.current)
+    }
+    if (
+      allowTap &&
+      gesture.kind === 'move' &&
+      !movedRef.current &&
+      lastPointerDurationRef.current <= TAP_MAX_DURATION
+    ) {
+      handledZoneTapAtRef.current = performance.now()
+      handleZoneTap(zone)
+    } else if (gesture.kind === 'move' && !movedRef.current) {
+      longTapEndedAtRef.current = performance.now()
     }
   }
 
@@ -621,6 +676,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       event.currentTarget.setPointerCapture(event.pointerId)
       const start = clientToMapPoint(event.clientX, event.clientY)
       drawGestureRef.current = { pointerId: event.pointerId, start }
+      interactionModeRef.current = 'zoneCreate'
       const points = getDrawRectangle(start, start)
       setDrawingPoints(points)
       movedRef.current = true
@@ -683,6 +739,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
         clientToMapPoint(event.clientX, event.clientY)
       )
       drawGestureRef.current = null
+      interactionModeRef.current = 'idle'
       setDrawingPoints(null)
       setIsDrawingZone(false)
       const zone = zoneService.createZone(points)
@@ -690,14 +747,24 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       zonesRef.current = storedZones
       setZones(storedZones)
       applyTransform(transformRef.current)
-      openEditor(zone)
+      selectedIdRef.current = zone.id
+      setSelectedId(zone.id)
+      setDraft(null)
+      updateSheetMode('closed')
       return
     }
+    const completedGesture = gestureRef.current
     pointersRef.current.delete(event.pointerId)
     gestureRef.current = null
     if (pointersRef.current.size > 0) {
       beginGesture()
     } else {
+      if (completedGesture) {
+        lastPointerDurationRef.current = performance.now() - completedGesture.startedAt
+        lastPointerEndedAtRef.current = performance.now()
+      }
+      if (movedRef.current) dragEndedAtRef.current = performance.now()
+      interactionModeRef.current = 'idle'
       persistTransform(transformRef.current)
     }
   }
@@ -800,16 +867,40 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       return
     }
 
-    if (selectedIdRef.current === zone.id && sheetModeRef.current === 'zoneEdit') {
-      closeEditor(true)
+    const isSameZone = selectedIdRef.current === zone.id
+    const isSheetOpen = sheetModeRef.current === 'zoneEdit'
+
+    if (isSameZone && isSheetOpen) {
+      closeEditor(false)
       return
     }
-    openEditor(zone)
+    if (isSameZone) {
+      openEditor(zone)
+      return
+    }
+
+    if (isSheetOpen) closeEditor(false)
+    selectedIdRef.current = zone.id
+    setSelectedId(zone.id)
+    setDraft(null)
+    setDeleteError(null)
+    if (!isSheetOpen) updateSheetMode('closed')
   }
 
   const handleMapClick = (event: MouseEvent<HTMLDivElement>) => {
     if ((event.target as Element).closest('.room')) return
     if (movedRef.current) return
+    if (isEditing) {
+      if (sheetModeRef.current === 'zoneEdit') {
+        closeEditor(false)
+        return
+      }
+      selectedIdRef.current = null
+      setSelectedId(null)
+      setDraft(null)
+      updateSheetMode('closed')
+      return
+    }
     selectedIdRef.current = null
     setSelectedId(null)
     updateSheetMode('closed')
@@ -976,14 +1067,20 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                       fill={preview?.color ?? zone.color}
                       onPointerDown={(event) => beginZoneGesture(event, zone, 'move')}
                       onPointerMove={(event) => moveZoneGesture(event, zone)}
-                      onPointerUp={(event) => endZoneGesture(event, zone.id)}
-                      onPointerCancel={(event) => endZoneGesture(event, zone.id)}
-                      onClick={() => { if (!movedRef.current) handleZoneTap(zone) }}
+                      onPointerUp={(event) => endZoneGesture(event, zone)}
+                      onPointerCancel={(event) => endZoneGesture(event, zone, false)}
+                      onClick={() => {
+                        if (performance.now() - handledZoneTapAtRef.current < 500) return
+                        if (performance.now() - longTapEndedAtRef.current < 500) return
+                        if (performance.now() - dragEndedAtRef.current < 500) return
+                        handleZoneTap(zone)
+                      }}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault()
+                          lastPointerDurationRef.current = 0
                           handleZoneTap(zone)
                         }
                       }}
@@ -1044,8 +1141,10 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                       tabIndex={0}
                       onPointerDown={(event) => beginZoneGesture(event, selectedZone, handle.kind)}
                       onPointerMove={(event) => moveZoneGesture(event, selectedZone)}
-                      onPointerUp={(event) => endZoneGesture(event, selectedZone.id)}
-                      onPointerCancel={(event) => endZoneGesture(event, selectedZone.id)}
+                      onPointerUp={(event) => endZoneGesture(event, selectedZone)}
+                      onPointerCancel={(event) =>
+                        endZoneGesture(event, selectedZone, false)
+                      }
                       onClick={(event) => event.stopPropagation()}
                     >
                       <circle className="resize-handle-hit" r="42" />
