@@ -15,6 +15,7 @@ import { MAX_ZONE_NAME_LENGTH, zoneService } from '../../services/ZoneService'
 import type { CreateItemInput, Item } from '../../types/item'
 import type { Point, Zone } from '../../types/zone'
 import { ItemCreateSheet } from '../ItemCreate/ItemCreateSheet'
+import { ItemEditSheet } from '../ItemEdit/ItemEditSheet'
 import {
   ZoneEditorSheet,
   type ZoneDraft
@@ -57,7 +58,7 @@ const DRAG_THRESHOLD = 7
 const ANIMATION_DURATION = 280
 const EDITOR_CLOSE_DURATION = 160
 
-type SheetMode = 'closed' | 'zoneDetail' | 'itemList' | 'itemCreate' | 'zoneEdit'
+type SheetMode = 'closed' | 'zoneDetail' | 'itemCreate' | 'itemEdit' | 'zoneEdit'
 
 function getDistance(a: PointerEvent, b: PointerEvent) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
@@ -160,6 +161,8 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const [zones, setZones] = useState<Zone[]>(() => createDefaultZones())
   const [items, setItems] = useState<Item[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  const [quantityPulseId, setQuantityPulseId] = useState<string | null>(null)
   const [sheetMode, setSheetMode] = useState<SheetMode>('closed')
   const [editorClosing, setEditorClosing] = useState(false)
   const [draft, setDraft] = useState<ZoneDraft | null>(null)
@@ -380,7 +383,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (sheetModeRef.current === 'itemCreate') return
+    if (sheetModeRef.current === 'itemCreate' || sheetModeRef.current === 'itemEdit') return
     stopAnimation()
     event.currentTarget.setPointerCapture(event.pointerId)
     pointersRef.current.set(event.pointerId, event.nativeEvent)
@@ -512,10 +515,10 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       })
     }
     if (!isEditing) {
-      if (sheetModeRef.current === 'itemCreate') return
+      if (sheetModeRef.current === 'itemCreate' || sheetModeRef.current === 'itemEdit') return
       if (
         selectedIdRef.current === zone.id &&
-        (sheetModeRef.current === 'zoneDetail' || sheetModeRef.current === 'itemList')
+        sheetModeRef.current === 'zoneDetail'
       ) {
         selectedIdRef.current = null
         setSelectedId(null)
@@ -582,12 +585,52 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     updateSheetMode('zoneDetail')
   }
 
+  const refreshInventory = () => {
+    setItems(itemRepository.getAllItems())
+    setZones(zoneRepository.getAllZones())
+  }
+
+  const changeQuantity = (itemId: string, direction: 'increase' | 'decrease') => {
+    if (direction === 'increase') itemService.incrementQuantity(itemId)
+    else itemService.decrementQuantity(itemId)
+    refreshInventory()
+    setQuantityPulseId(null)
+    requestAnimationFrame(() => setQuantityPulseId(itemId))
+  }
+
+  const openItemEditor = (itemId: string) => {
+    setSelectedItemId(itemId)
+    updateSheetMode('itemEdit')
+  }
+
+  const saveEditedItem = (changes: Parameters<typeof itemService.updateItem>[1]) => {
+    if (!selectedItemId) return
+    itemService.updateItem(selectedItemId, changes)
+    refreshInventory()
+    setSelectedItemId(null)
+    updateSheetMode('zoneDetail')
+  }
+
+  const deleteSelectedItem = () => {
+    if (!selectedItemId) return
+    itemService.deleteItem(selectedItemId)
+    refreshInventory()
+    setSelectedItemId(null)
+    updateSheetMode('zoneDetail')
+  }
+
   const activeDraftZoneId = sheetMode === 'zoneEdit' ? selectedId : null
   const selectedZone = findZoneById(zones, selectedId)
   const selectedItems = selectedId ? items.filter((item) => item.zoneId === selectedId) : []
-  const sectionClassName = sheetMode === 'zoneEdit' || sheetMode === 'itemCreate'
+  const selectedItem = selectedItemId
+    ? items.find((item) => item.id === selectedItemId)
+    : undefined
+  const latestChange = selectedId
+    ? itemRepository.getLatestChangeByZone(selectedId)
+    : undefined
+  const sectionClassName = sheetMode === 'zoneEdit' || sheetMode === 'itemCreate' || sheetMode === 'itemEdit'
     ? 'map-section map-section--editor-open'
-    : sheetMode === 'zoneDetail' || sheetMode === 'itemList'
+    : sheetMode === 'zoneDetail'
       ? 'map-section map-section--detail-open'
       : 'map-section'
 
@@ -674,14 +717,16 @@ export function HomeMap({ isEditing }: HomeMapProps) {
           onSave={saveEditingZone}
         />
       )}
-      {!isEditing && (sheetMode === 'zoneDetail' || sheetMode === 'itemList') && selectedZone && (
+      {!isEditing && sheetMode === 'zoneDetail' && selectedZone && (
         <ZoneDetailSheet
           items={selectedItems}
           key={selectedZone.id}
+          latestChange={latestChange}
           onAddItem={() => updateSheetMode('itemCreate')}
-          onBack={() => updateSheetMode('zoneDetail')}
-          onViewItems={() => updateSheetMode('itemList')}
-          view={sheetMode === 'itemList' ? 'items' : 'detail'}
+          onDecrease={(itemId) => changeQuantity(itemId, 'decrease')}
+          onEdit={openItemEditor}
+          onIncrease={(itemId) => changeQuantity(itemId, 'increase')}
+          quantityPulseId={quantityPulseId}
           zone={selectedZone}
         />
       )}
@@ -691,6 +736,18 @@ export function HomeMap({ isEditing }: HomeMapProps) {
           onCancel={() => updateSheetMode('zoneDetail')}
           onSave={saveItem}
           zone={selectedZone}
+        />
+      )}
+      {!isEditing && sheetMode === 'itemEdit' && selectedItem && (
+        <ItemEditSheet
+          item={selectedItem}
+          key={selectedItem.id}
+          onCancel={() => {
+            setSelectedItemId(null)
+            updateSheetMode('zoneDetail')
+          }}
+          onDelete={deleteSelectedItem}
+          onSave={saveEditedItem}
         />
       )}
     </section>

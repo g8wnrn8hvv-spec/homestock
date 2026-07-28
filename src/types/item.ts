@@ -16,3 +16,27 @@ export interface CreateItemInput {
   unit?: string
   memo?: string
 }
+
+export type ItemChangeType =
+  | 'itemCreated'
+  | 'itemQuantityIncreased'
+  | 'itemQuantityDecreased'
+  | 'itemEdited'
+  | 'itemDeleted'
+
+export interface ItemChange {
+  id: string
+  zoneId: string
+  itemId?: string
+  itemName: string
+  type: ItemChangeType
+  message: string
+  createdAt: string
+}
+
+export interface UpdateItemInput {
+  name?: string
+  quantity?: number
+  unit?: string
+  memo?: string
+}
