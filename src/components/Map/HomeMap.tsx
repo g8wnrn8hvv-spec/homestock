@@ -15,6 +15,7 @@ import {
   ZoneEditorSheet,
   type ZoneDraft
 } from '../ZoneEditor/ZoneEditorSheet'
+import { ZoneDetailSheet } from '../ZoneDetail/ZoneDetailSheet'
 import './HomeMap.css'
 
 interface Transform {
@@ -134,6 +135,16 @@ function getZoneLabel(name: string, width: number, fontSize: number) {
   return name.length > maxCharacters ? `${name.slice(0, maxCharacters)}…` : name
 }
 
+function findZoneById(zones: Zone[], id: string | null): Zone | undefined {
+  if (!id) return undefined
+  for (const zone of zones) {
+    if (zone.id === id) return zone
+    const child = findZoneById(zone.children, id)
+    if (child) return child
+  }
+  return undefined
+}
+
 interface HomeMapProps {
   isEditing: boolean
 }
@@ -143,6 +154,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorClosing, setEditorClosing] = useState(false)
+  const [detailOpen, setDetailOpen] = useState(false)
   const [draft, setDraft] = useState<ZoneDraft | null>(null)
   const selectedIdRef = useRef<string | null>(null)
   const editorOpenRef = useRef(false)
@@ -274,7 +286,10 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }, [])
 
   useEffect(() => {
-    if (isEditing) return
+    if (isEditing) {
+      setDetailOpen(false)
+      return
+    }
     if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
     editorCloseTimerRef.current = null
     editorOpenRef.current = false
@@ -405,6 +420,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }
 
   const focusZoneNormally = (zone: Zone) => {
+    setDetailOpen(true)
     if (selectedIdRef.current === zone.id) return
     selectedIdRef.current = zone.id
     setSelectedId(zone.id)
@@ -468,6 +484,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     setSelectedId(zone.id)
     setDraft({ name: zone.name, color: zone.color })
     setEditorOpen(true)
+    setDetailOpen(false)
   }
 
   const handleZoneTap = (zone: Zone) => {
@@ -497,6 +514,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     if (movedRef.current) return
     selectedIdRef.current = null
     setSelectedId(null)
+    setDetailOpen(false)
   }
 
   const showFullMap = () => {
@@ -504,6 +522,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     if (!fit) return
     selectedIdRef.current = null
     setSelectedId(null)
+    setDetailOpen(false)
     animateTransform(fit)
   }
 
@@ -530,10 +549,16 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }
 
   const activeDraftZoneId = editorOpen ? selectedId : null
+  const selectedZone = findZoneById(zones, selectedId)
+  const sectionClassName = editorOpen
+    ? 'map-section map-section--editor-open'
+    : detailOpen
+      ? 'map-section map-section--detail-open'
+      : 'map-section'
 
   return (
     <section
-      className={editorOpen ? 'map-section map-section--editor-open' : 'map-section'}
+      className={sectionClassName}
       aria-label="집 공간 지도"
     >
       <div
@@ -626,6 +651,9 @@ export function HomeMap({ isEditing }: HomeMapProps) {
           onChange={setDraft}
           onSave={saveEditingZone}
         />
+      )}
+      {!isEditing && detailOpen && selectedZone && (
+        <ZoneDetailSheet key={selectedZone.id} zone={selectedZone} />
       )}
     </section>
   )

@@ -117,6 +117,10 @@
   bottom: calc(env(safe-area-inset-bottom) + 282px);
 }
 
+.map-section--detail-open .map-actions {
+  bottom: calc(env(safe-area-inset-bottom) + 226px);
+}
+
 .fit-map-button {
   align-items: center;
   appearance: none;
