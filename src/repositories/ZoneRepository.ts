@@ -127,6 +127,12 @@ function replaceZone(zones: Zone[], updatedZone: Zone): Zone[] {
   })
 }
 
+function removeZone(zones: Zone[], id: string): Zone[] {
+  return zones
+    .filter((zone) => zone.id !== id)
+    .map((zone) => ({ ...zone, children: removeZone(zone.children, id) }))
+}
+
 export class ZoneRepository {
   private zones: Zone[] = []
 
@@ -146,6 +152,19 @@ export class ZoneRepository {
     this.zones = replaceZone(this.zones, cloneZones([zone])[0])
     this.save()
     return cloneZones([zone])[0]
+  }
+
+  addZone(zone: Zone): Zone {
+    if (findZone(this.zones, zone.id)) throw new Error(`Zone already exists: ${zone.id}`)
+    this.zones = [...this.zones, cloneZones([zone])[0]]
+    this.save()
+    return cloneZones([zone])[0]
+  }
+
+  removeZone(id: string): void {
+    if (!findZone(this.zones, id)) return
+    this.zones = removeZone(this.zones, id)
+    this.save()
   }
 
   replaceZones(zones: Zone[]): Zone[] {

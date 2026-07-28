@@ -60,6 +60,45 @@
   filter: brightness(0.87) saturate(1.04);
 }
 
+.room.editing-selected {
+  stroke: rgba(75, 75, 71, 0.72);
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.resize-handle-position {
+  pointer-events: none;
+}
+
+.resize-handle {
+  cursor: nwse-resize;
+  pointer-events: auto;
+  touch-action: none;
+  transform: scale(var(--label-inverse-scale));
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.resize-handle-hit {
+  fill: transparent;
+  stroke: none;
+}
+
+.resize-handle-dot {
+  fill: #fff;
+  stroke: #696864;
+  stroke-width: 2;
+}
+
+.drawing-zone-preview {
+  fill: rgba(212, 216, 220, 0.72);
+  pointer-events: none;
+  stroke: rgba(79, 83, 87, 0.68);
+  stroke-dasharray: 7 5;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
 .zone-label-position {
   pointer-events: none;
 }
@@ -114,11 +153,11 @@
 }
 
 .map-section--editor-open .map-actions {
-  bottom: calc(env(safe-area-inset-bottom) + 282px);
+  bottom: calc(env(safe-area-inset-bottom) + 368px);
 }
 
 .map-section--detail-open .map-actions {
-  bottom: calc(env(safe-area-inset-bottom) + 226px);
+  bottom: calc(env(safe-area-inset-bottom) + 320px);
 }
 
 .fit-map-button {
@@ -157,6 +196,31 @@
 .fit-map-button:focus-visible {
   outline: 2px solid rgba(92, 112, 153, 0.35);
   outline-offset: 3px;
+}
+
+.add-zone-button {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(67, 67, 63, 0.08);
+  border-radius: 15px;
+  box-shadow: 0 4px 16px rgba(54, 52, 48, 0.1);
+  color: #5d5c58;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  min-height: 44px;
+  padding: 0 14px;
+  pointer-events: auto;
+  white-space: nowrap;
+}
+
+.add-zone-button:active {
+  transform: scale(0.96);
+}
+
+.add-zone-button[aria-pressed="true"] {
+  background: #595955;
+  color: #fff;
 }
 
 @media (min-width: 600px) {

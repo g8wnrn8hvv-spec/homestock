@@ -7,11 +7,13 @@ export interface ZoneDraft {
 }
 
 interface ZoneEditorSheetProps {
+  deleteError: string | null
   draft: ZoneDraft
   isClosing: boolean
   maxNameLength: number
   onCancel: () => void
   onChange: (draft: ZoneDraft) => void
+  onDelete: () => void
   onSave: () => void
 }
 
@@ -27,11 +29,13 @@ export const ZONE_COLORS = [
 ] as const
 
 export function ZoneEditorSheet({
+  deleteError,
   draft,
   isClosing,
   maxNameLength,
   onCancel,
   onChange,
+  onDelete,
   onSave
 }: ZoneEditorSheetProps) {
   const stopPropagation = (event: SyntheticEvent | PointerEvent) => event.stopPropagation()
@@ -54,7 +58,6 @@ export function ZoneEditorSheet({
         </div>
         <span className="current-color" style={{ backgroundColor: draft.color }} aria-hidden="true" />
       </div>
-
       <label className="name-field">
         <span>이름</span>
         <input
@@ -66,7 +69,6 @@ export function ZoneEditorSheet({
         />
         <small>{draft.name.length}/{maxNameLength}</small>
       </label>
-
       <fieldset className="color-field">
         <legend>색상</legend>
         <div className="color-palette">
@@ -85,7 +87,7 @@ export function ZoneEditorSheet({
           ))}
         </div>
       </fieldset>
-
+      {deleteError && <p className="zone-delete-error" role="alert">{deleteError}</p>}
       <div className="sheet-actions">
         <button type="button" className="cancel-button" onClick={onCancel}>취소</button>
         <button
@@ -97,6 +99,7 @@ export function ZoneEditorSheet({
           저장
         </button>
       </div>
+      <button type="button" className="zone-delete-button" onClick={onDelete}>구역 삭제</button>
     </aside>
   )
 }

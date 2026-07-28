@@ -36,6 +36,19 @@ interface Gesture {
   transform: Transform
 }
 
+interface ZoneGesture {
+  kind: 'move' | 'resize-x' | 'resize-y' | 'resize-xy'
+  pointerId: number
+  start: Point
+  points: Point[]
+  bounds: ReturnType<typeof getBounds>
+}
+
+interface DrawGesture {
+  pointerId: number
+  start: Point
+}
+
 interface MapMetrics {
   fitScale: number
   maxScale: number
@@ -57,6 +70,11 @@ const DETAIL_SHEET_CLEARANCE = 230
 const DRAG_THRESHOLD = 7
 const ANIMATION_DURATION = 280
 const EDITOR_CLOSE_DURATION = 160
+const MAP_WIDTH = 560
+const MAP_HEIGHT = 640
+const MIN_ZONE_SIZE = 80
+const MAX_ZONE_WIDTH = 520
+const MAX_ZONE_HEIGHT = 600
 
 type SheetMode = 'closed' | 'zoneDetail' | 'itemCreate' | 'itemEdit' | 'zoneEdit'
 
@@ -105,6 +123,21 @@ function getBounds(zone: Zone) {
   const right = Math.max(...xs)
   const top = Math.min(...ys)
   const bottom = Math.max(...ys)
+  return { left, right, top, bottom, width: right - left, height: bottom - top }
+}
+
+function getMapBounds(zones: Zone[]) {
+  const collectVisible = (values: Zone[]): Zone[] => values.flatMap((zone) => [
+    ...(zone.visible ? [zone] : []),
+    ...collectVisible(zone.children)
+  ])
+  const visible = collectVisible(zones)
+  if (visible.length === 0) return { left: 0, right: MAP_WIDTH, top: 0, bottom: MAP_HEIGHT, width: MAP_WIDTH, height: MAP_HEIGHT }
+  const bounds = visible.map(getBounds)
+  const left = Math.min(...bounds.map((value) => value.left))
+  const right = Math.max(...bounds.map((value) => value.right))
+  const top = Math.min(...bounds.map((value) => value.top))
+  const bottom = Math.max(...bounds.map((value) => value.bottom))
   return { left, right, top, bottom, width: right - left, height: bottom - top }
 }
 
@@ -166,6 +199,9 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const [sheetMode, setSheetMode] = useState<SheetMode>('closed')
   const [editorClosing, setEditorClosing] = useState(false)
   const [draft, setDraft] = useState<ZoneDraft | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [isDrawingZone, setIsDrawingZone] = useState(false)
+  const [drawingPoints, setDrawingPoints] = useState<Point[] | null>(null)
   const selectedIdRef = useRef<string | null>(null)
   const sheetModeRef = useRef<SheetMode>('closed')
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -174,12 +210,20 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const appliedTransformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const pointersRef = useRef(new Map<number, PointerEvent>())
   const gestureRef = useRef<Gesture | null>(null)
+  const zoneGestureRef = useRef<ZoneGesture | null>(null)
+  const drawGestureRef = useRef<DrawGesture | null>(null)
+  const zonePointsRef = useRef<Point[] | null>(null)
+  const zonesRef = useRef<Zone[]>(zones)
   const frameRef = useRef<number | null>(null)
   const animationTimerRef = useRef<number | null>(null)
   const editorCloseTimerRef = useRef<number | null>(null)
   const pendingTransformRef = useRef<Transform | null>(null)
   const movedRef = useRef(false)
   const initializedRef = useRef(false)
+
+  useEffect(() => {
+    zonesRef.current = zones
+  }, [zones])
 
   const updateSheetMode = useCallback((mode: SheetMode) => {
     sheetModeRef.current = mode
@@ -223,6 +267,43 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     }
   }, [getMetrics])
 
+  const clampTransform = useCallback((next: Transform): Transform => {
+    const metrics = getMetrics()
+    if (!metrics) return next
+    const mapBounds = getMapBounds(zonesRef.current)
+    const unitScale = metrics.stageWidth / MAP_WIDTH
+    const clampAxis = (
+      offset: number,
+      viewportSize: number,
+      stageSize: number,
+      boundStart: number,
+      boundSize: number
+    ) => {
+      const scaledSize = boundSize * unitScale * next.scale
+      const base = (viewportSize - stageSize) / 2
+      const scaledBoundStart = boundStart * unitScale * next.scale
+      const currentStart = base + offset + scaledBoundStart
+      if (scaledSize <= viewportSize) {
+        const centeredStart = (viewportSize - scaledSize) / 2
+        const allowance = Math.min(scaledSize * 0.12, viewportSize * 0.08)
+        return Math.min(
+          centeredStart + allowance,
+          Math.max(centeredStart - allowance, currentStart)
+        ) - base - scaledBoundStart
+      }
+      const allowance = viewportSize * 0.12
+      return Math.min(
+        allowance,
+        Math.max(viewportSize - scaledSize - allowance, currentStart)
+      ) - base - scaledBoundStart
+    }
+    return {
+      x: clampAxis(next.x, metrics.viewportWidth, metrics.stageWidth, mapBounds.left, mapBounds.width),
+      y: clampAxis(next.y, metrics.viewportHeight, metrics.stageHeight, mapBounds.top, mapBounds.height),
+      scale: next.scale
+    }
+  }, [getMetrics])
+
   const persistTransform = useCallback((transform: Transform) => {
     try {
       const stored: StoredMapView = { version: STORAGE_VERSION, ...transform }
@@ -233,8 +314,9 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }, [])
 
   const applyTransform = useCallback((next: Transform) => {
-    transformRef.current = next
-    pendingTransformRef.current = next
+    const constrained = clampTransform(next)
+    transformRef.current = constrained
+    pendingTransformRef.current = constrained
     if (frameRef.current !== null) return
     frameRef.current = requestAnimationFrame(() => {
       const pending = pendingTransformRef.current
@@ -247,7 +329,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       pendingTransformRef.current = null
       frameRef.current = null
     })
-  }, [])
+  }, [clampTransform])
 
   const stopAnimation = useCallback(() => {
     const stage = stageRef.current
@@ -270,20 +352,21 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     const stage = stageRef.current
     if (!stage) return
     stopAnimation()
-    transformRef.current = next
+    const constrained = clampTransform(next)
+    transformRef.current = constrained
     stage.classList.add('map-stage--animating')
     requestAnimationFrame(() => {
       stage.style.transform =
-        `translate3d(${next.x}px, ${next.y}px, 0) scale3d(${next.scale}, ${next.scale}, 1)`
-      stage.style.setProperty('--label-inverse-scale', String(1 / next.scale))
-      appliedTransformRef.current = next
+        `translate3d(${constrained.x}px, ${constrained.y}px, 0) scale3d(${constrained.scale}, ${constrained.scale}, 1)`
+      stage.style.setProperty('--label-inverse-scale', String(1 / constrained.scale))
+      appliedTransformRef.current = constrained
     })
     animationTimerRef.current = window.setTimeout(() => {
       stage.classList.remove('map-stage--animating')
       animationTimerRef.current = null
-      persistTransform(next)
+      persistTransform(constrained)
     }, ANIMATION_DURATION + 40)
-  }, [persistTransform, stopAnimation])
+  }, [clampTransform, persistTransform, stopAnimation])
 
   const toStageCoordinates = useCallback((point: Point) => {
     const stage = stageRef.current
@@ -311,6 +394,9 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     updateSheetMode('closed')
     setEditorClosing(false)
     setDraft(null)
+    setIsDrawingZone(false)
+    setDrawingPoints(null)
+    drawGestureRef.current = null
   }, [isEditing, updateSheetMode])
 
   useEffect(() => {
@@ -348,9 +434,13 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       if (!initializedRef.current) return
       const metrics = getMetrics()
       const current = transformRef.current
-      if (!metrics || (current.scale >= metrics.fitScale && current.scale <= metrics.maxScale)) return
-      const fallback = getFitTransform()
-      if (fallback) applyTransform(fallback)
+      if (!metrics) return
+      if (current.scale < metrics.fitScale || current.scale > metrics.maxScale) {
+        const fallback = getFitTransform()
+        if (fallback) applyTransform(fallback)
+      } else {
+        applyTransform(current)
+      }
     })
     if (viewportRef.current) observer.observe(viewportRef.current)
 
@@ -382,8 +472,160 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     }
   }
 
+  const clientToMapPoint = (clientX: number, clientY: number): Point => {
+    const stage = stageRef.current
+    if (!stage) return { x: 0, y: 0 }
+    const rect = stage.getBoundingClientRect()
+    return {
+      x: ((clientX - rect.left) / rect.width) * MAP_WIDTH,
+      y: ((clientY - rect.top) / rect.height) * MAP_HEIGHT
+    }
+  }
+
+  const beginZoneGesture = (
+    event: ReactPointerEvent<SVGElement>,
+    zone: Zone,
+    kind: ZoneGesture['kind']
+  ) => {
+    if (!isEditing || isDrawingZone || selectedIdRef.current !== zone.id) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const pointer = clientToMapPoint(event.clientX, event.clientY)
+    let resolvedKind = kind
+    if (kind !== 'move') {
+      const bounds = getBounds(zone)
+      const candidates: Array<{ kind: ZoneGesture['kind']; point: Point }> = [
+        {
+          kind: 'resize-x',
+          point: { x: bounds.right, y: (bounds.top + bounds.bottom) / 2 }
+        },
+        {
+          kind: 'resize-y',
+          point: { x: (bounds.left + bounds.right) / 2, y: bounds.bottom }
+        },
+        {
+          kind: 'resize-xy',
+          point: { x: bounds.right, y: bounds.bottom }
+        }
+      ]
+      resolvedKind = candidates.reduce((closest, candidate) => {
+        const closestDistance = Math.hypot(pointer.x - closest.point.x, pointer.y - closest.point.y)
+        const candidateDistance = Math.hypot(pointer.x - candidate.point.x, pointer.y - candidate.point.y)
+        return candidateDistance < closestDistance ? candidate : closest
+      }).kind
+    }
+    zoneGestureRef.current = {
+      kind: resolvedKind,
+      pointerId: event.pointerId,
+      start: pointer,
+      points: zone.polygon.points.map((point) => ({ ...point })),
+      bounds: getBounds(zone)
+    }
+    zonePointsRef.current = zone.polygon.points.map((point) => ({ ...point }))
+    movedRef.current = false
+  }
+
+  const moveZoneGesture = (event: ReactPointerEvent<SVGElement>, zone: Zone) => {
+    const gesture = zoneGestureRef.current
+    if (!gesture || gesture.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    const current = clientToMapPoint(event.clientX, event.clientY)
+    const dx = current.x - gesture.start.x
+    const dy = current.y - gesture.start.y
+    if (Math.hypot(dx, dy) > DRAG_THRESHOLD) movedRef.current = true
+    let points: Point[]
+    if (gesture.kind === 'move') {
+      const clampedDx = Math.min(
+        MAP_WIDTH - gesture.bounds.right,
+        Math.max(-gesture.bounds.left, dx)
+      )
+      const clampedDy = Math.min(
+        MAP_HEIGHT - gesture.bounds.bottom,
+        Math.max(-gesture.bounds.top, dy)
+      )
+      points = gesture.points.map((point) => ({
+        x: point.x + clampedDx,
+        y: point.y + clampedDy
+      }))
+    } else {
+      const resizeWidth = gesture.kind === 'resize-x' || gesture.kind === 'resize-xy'
+      const resizeHeight = gesture.kind === 'resize-y' || gesture.kind === 'resize-xy'
+      const requestedRight = resizeWidth ? gesture.bounds.right + dx : gesture.bounds.right
+      const requestedBottom = resizeHeight ? gesture.bounds.bottom + dy : gesture.bounds.bottom
+      const right = Math.min(
+        MAP_WIDTH,
+        Math.max(gesture.bounds.left + MIN_ZONE_SIZE, requestedRight)
+      )
+      const bottom = Math.min(
+        MAP_HEIGHT,
+        Math.max(gesture.bounds.top + MIN_ZONE_SIZE, requestedBottom)
+      )
+      const width = Math.min(MAX_ZONE_WIDTH, right - gesture.bounds.left)
+      const height = Math.min(MAX_ZONE_HEIGHT, bottom - gesture.bounds.top)
+      const finalRight = gesture.bounds.left + width
+      const finalBottom = gesture.bounds.top + height
+      points = [
+        { x: gesture.bounds.left, y: gesture.bounds.top },
+        { x: finalRight, y: gesture.bounds.top },
+        { x: finalRight, y: finalBottom },
+        { x: gesture.bounds.left, y: finalBottom }
+      ]
+    }
+    setZones((currentZones) => currentZones.map((currentZone) => (
+      currentZone.id === zone.id
+        ? { ...currentZone, polygon: { ...currentZone.polygon, points } }
+        : currentZone
+    )))
+    zonePointsRef.current = points
+  }
+
+  const endZoneGesture = (event: ReactPointerEvent<SVGElement>, zoneId: string) => {
+    const gesture = zoneGestureRef.current
+    if (!gesture || gesture.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    zoneGestureRef.current = null
+    const points = zonePointsRef.current
+    zonePointsRef.current = null
+    if (points) {
+      zoneService.updatePolygon(zoneId, points)
+      const storedZones = zoneRepository.getAllZones()
+      zonesRef.current = storedZones
+      setZones(storedZones)
+      applyTransform(transformRef.current)
+    }
+  }
+
+  const getDrawRectangle = (start: Point, current: Point): Point[] => {
+    const directionX = current.x >= start.x ? 1 : -1
+    const directionY = current.y >= start.y ? 1 : -1
+    const width = Math.min(MAX_ZONE_WIDTH, Math.max(MIN_ZONE_SIZE, Math.abs(current.x - start.x)))
+    const height = Math.min(MAX_ZONE_HEIGHT, Math.max(MIN_ZONE_SIZE, Math.abs(current.y - start.y)))
+    let left = directionX > 0 ? start.x : start.x - width
+    let top = directionY > 0 ? start.y : start.y - height
+    left = Math.min(MAP_WIDTH - width, Math.max(0, left))
+    top = Math.min(MAP_HEIGHT - height, Math.max(0, top))
+    return [
+      { x: left, y: top },
+      { x: left + width, y: top },
+      { x: left + width, y: top + height },
+      { x: left, y: top + height }
+    ]
+  }
+
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (sheetModeRef.current === 'itemCreate' || sheetModeRef.current === 'itemEdit') return
+    if (isEditing && isDrawingZone) {
+      event.currentTarget.setPointerCapture(event.pointerId)
+      const start = clientToMapPoint(event.clientX, event.clientY)
+      drawGestureRef.current = { pointerId: event.pointerId, start }
+      const points = getDrawRectangle(start, start)
+      setDrawingPoints(points)
+      movedRef.current = true
+      return
+    }
     stopAnimation()
     event.currentTarget.setPointerCapture(event.pointerId)
     pointersRef.current.set(event.pointerId, event.nativeEvent)
@@ -392,6 +634,14 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drawGesture = drawGestureRef.current
+    if (drawGesture?.pointerId === event.pointerId) {
+      setDrawingPoints(getDrawRectangle(
+        drawGesture.start,
+        clientToMapPoint(event.clientX, event.clientY)
+      ))
+      return
+    }
     if (!pointersRef.current.has(event.pointerId) || !gestureRef.current) return
     pointersRef.current.set(event.pointerId, event.nativeEvent)
     const active = [...pointersRef.current.values()]
@@ -426,6 +676,23 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }
 
   const handlePointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drawGesture = drawGestureRef.current
+    if (drawGesture?.pointerId === event.pointerId) {
+      const points = getDrawRectangle(
+        drawGesture.start,
+        clientToMapPoint(event.clientX, event.clientY)
+      )
+      drawGestureRef.current = null
+      setDrawingPoints(null)
+      setIsDrawingZone(false)
+      const zone = zoneService.createZone(points)
+      const storedZones = zoneRepository.getAllZones()
+      zonesRef.current = storedZones
+      setZones(storedZones)
+      applyTransform(transformRef.current)
+      openEditor(zone)
+      return
+    }
     pointersRef.current.delete(event.pointerId)
     gestureRef.current = null
     if (pointersRef.current.size > 0) {
@@ -501,6 +768,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     setEditorClosing(false)
     setSelectedId(zone.id)
     setDraft({ name: zone.name, color: zone.color })
+    setDeleteError(null)
     updateSheetMode('zoneEdit')
   }
 
@@ -576,6 +844,46 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     }
     setZones(zoneRepository.getAllZones())
     cancelEditingZone()
+  }
+
+  const toggleZoneDrawing = () => {
+    const next = !isDrawingZone
+    setIsDrawingZone(next)
+    setDrawingPoints(null)
+    if (next) {
+      selectedIdRef.current = null
+      setSelectedId(null)
+      setDraft(null)
+      updateSheetMode('closed')
+    }
+  }
+
+  const deleteEditingZone = () => {
+    if (!selectedId) return
+    if (items.some((item) => item.zoneId === selectedId)) {
+      setDeleteError(
+        '이 공간에는 등록된 물품이 있습니다. 먼저 물품을 다른 공간으로 이동하거나 삭제해주세요.'
+      )
+      return
+    }
+    try {
+      zoneService.deleteZone(selectedId)
+      const storedZones = zoneRepository.getAllZones()
+      zonesRef.current = storedZones
+      setZones(storedZones)
+      applyTransform(transformRef.current)
+      selectedIdRef.current = null
+      setSelectedId(null)
+      setDraft(null)
+      setDeleteError(null)
+      updateSheetMode('closed')
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error && error.message === 'ZONE_HAS_ITEMS'
+          ? '이 공간에는 등록된 물품이 있습니다. 먼저 물품을 다른 공간으로 이동하거나 삭제해주세요.'
+          : '구역을 삭제하지 못했습니다.'
+      )
+    }
   }
 
   const saveItem = (input: CreateItemInput) => {
@@ -659,9 +967,17 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                   <g className="zone" key={zone.id}>
                     <path
                       aria-label={zone.name}
-                      className={selectedId === zone.id ? 'room selected' : 'room'}
+                      className={[
+                        'room',
+                        selectedId === zone.id ? 'selected' : '',
+                        isEditing && selectedId === zone.id ? 'editing-selected' : ''
+                      ].filter(Boolean).join(' ')}
                       d={roundedPolygonPath(zone.polygon.points, zone.polygon.cornerRadius)}
                       fill={preview?.color ?? zone.color}
+                      onPointerDown={(event) => beginZoneGesture(event, zone, 'move')}
+                      onPointerMove={(event) => moveZoneGesture(event, zone)}
+                      onPointerUp={(event) => endZoneGesture(event, zone.id)}
+                      onPointerCancel={(event) => endZoneGesture(event, zone.id)}
                       onClick={() => { if (!movedRef.current) handleZoneTap(zone) }}
                       role="button"
                       tabIndex={0}
@@ -688,11 +1004,72 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                   </g>
                 )
               })}
+              {drawingPoints && (
+                <path
+                  className="drawing-zone-preview"
+                  d={roundedPolygonPath(drawingPoints, 8)}
+                />
+              )}
+              {isEditing && selectedZone && (() => {
+                const selectedBounds = getBounds(selectedZone)
+                return ([
+                  {
+                    kind: 'resize-x' as const,
+                    label: '가로 크기 조절',
+                    x: selectedBounds.right,
+                    y: (selectedBounds.top + selectedBounds.bottom) / 2
+                  },
+                  {
+                    kind: 'resize-y' as const,
+                    label: '세로 크기 조절',
+                    x: (selectedBounds.left + selectedBounds.right) / 2,
+                    y: selectedBounds.bottom
+                  },
+                  {
+                    kind: 'resize-xy' as const,
+                    label: '자유 크기 조절',
+                    x: selectedBounds.right,
+                    y: selectedBounds.bottom
+                  }
+                ]).map((handle) => (
+                  <g
+                    className="resize-handle-position"
+                    key={handle.kind}
+                    transform={`translate(${handle.x} ${handle.y})`}
+                  >
+                    <g
+                      aria-label={`${selectedZone.name} ${handle.label}`}
+                      className="resize-handle"
+                      role="button"
+                      tabIndex={0}
+                      onPointerDown={(event) => beginZoneGesture(event, selectedZone, handle.kind)}
+                      onPointerMove={(event) => moveZoneGesture(event, selectedZone)}
+                      onPointerUp={(event) => endZoneGesture(event, selectedZone.id)}
+                      onPointerCancel={(event) => endZoneGesture(event, selectedZone.id)}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <circle className="resize-handle-hit" r="42" />
+                      <circle className="resize-handle-dot" r="7" />
+                    </g>
+                  </g>
+                ))
+              })()}
             </g>
           </svg>
         </div>
       </div>
       <div className="map-actions">
+        {isEditing && (
+          <button
+            className="add-zone-button"
+            type="button"
+            aria-pressed={isDrawingZone}
+            onClick={toggleZoneDrawing}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            {isDrawingZone ? '취소' : '＋ 구역 추가'}
+          </button>
+        )}
         <button
           className="fit-map-button"
           type="button"
@@ -712,8 +1089,10 @@ export function HomeMap({ isEditing }: HomeMapProps) {
           draft={draft}
           isClosing={editorClosing}
           maxNameLength={MAX_ZONE_NAME_LENGTH}
+          deleteError={deleteError}
           onCancel={cancelEditingZone}
           onChange={setDraft}
+          onDelete={deleteEditingZone}
           onSave={saveEditingZone}
         />
       )}
