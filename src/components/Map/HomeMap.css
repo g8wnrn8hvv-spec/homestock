@@ -32,7 +32,7 @@
   transition: transform 280ms cubic-bezier(0.22, 0.72, 0.24, 1);
 }
 
-.map-stage--animating .zone-label {
+.map-stage--animating .zone-label-scale {
   transition: transform 280ms cubic-bezier(0.22, 0.72, 0.24, 1);
 }
 
@@ -60,6 +60,17 @@
   filter: brightness(0.87) saturate(1.04);
 }
 
+.zone-label-position {
+  pointer-events: none;
+}
+
+.zone-label-scale {
+  pointer-events: none;
+  transform: scale(var(--label-inverse-scale));
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
 .zone-label {
   fill: #686863;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
@@ -70,9 +81,6 @@
   text-anchor: middle;
   dominant-baseline: central;
   opacity: 0.74;
-  transform: scale(var(--label-inverse-scale));
-  transform-box: fill-box;
-  transform-origin: center;
   transition: fill 120ms ease, font-size 120ms ease, opacity 120ms ease;
   user-select: none;
 }
@@ -155,7 +163,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .map-stage--animating,
-  .map-stage--animating .zone-label,
+  .map-stage--animating .zone-label-scale,
   .zone-label,
   .room {
     transition: none;

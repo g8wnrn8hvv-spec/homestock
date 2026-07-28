@@ -144,6 +144,8 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorClosing, setEditorClosing] = useState(false)
   const [draft, setDraft] = useState<ZoneDraft | null>(null)
+  const selectedIdRef = useRef<string | null>(null)
+  const editorOpenRef = useRef(false)
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
@@ -273,6 +275,9 @@ export function HomeMap({ isEditing }: HomeMapProps) {
 
   useEffect(() => {
     if (isEditing) return
+    if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
+    editorCloseTimerRef.current = null
+    editorOpenRef.current = false
     setEditorOpen(false)
     setEditorClosing(false)
     setDraft(null)
@@ -399,38 +404,9 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     }
   }
 
-  const focusZone = (zone: Zone) => {
-    if (import.meta.env.DEV) {
-      console.info('[HomeStock Zone]', {
-        id: zone.id,
-        name: zone.name,
-        items: zone.items,
-        polygonPointCount: zone.polygon.points.length,
-        zone
-      })
-    }
-    if (isEditing) {
-      if (selectedId === zone.id && editorOpen) {
-        setSelectedId(null)
-        setEditorClosing(true)
-        editorCloseTimerRef.current = window.setTimeout(() => {
-          setEditorOpen(false)
-          setEditorClosing(false)
-          setDraft(null)
-          editorCloseTimerRef.current = null
-        }, EDITOR_CLOSE_DURATION)
-        return
-      }
-      if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
-      editorCloseTimerRef.current = null
-      setEditorClosing(false)
-      setSelectedId(zone.id)
-      setDraft({ name: zone.name, color: zone.color })
-      setEditorOpen(true)
-      return
-    }
-
-    if (selectedId === zone.id) return
+  const focusZoneNormally = (zone: Zone) => {
+    if (selectedIdRef.current === zone.id) return
+    selectedIdRef.current = zone.id
     setSelectedId(zone.id)
 
     const metrics = getMetrics()
@@ -467,27 +443,72 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     })
   }
 
+  const closeEditor = (clearSelection: boolean) => {
+    if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
+    if (clearSelection) {
+      selectedIdRef.current = null
+      setSelectedId(null)
+    }
+    setEditorClosing(true)
+    editorCloseTimerRef.current = window.setTimeout(() => {
+      editorOpenRef.current = false
+      setEditorOpen(false)
+      setEditorClosing(false)
+      setDraft(null)
+      editorCloseTimerRef.current = null
+    }, EDITOR_CLOSE_DURATION)
+  }
+
+  const openEditor = (zone: Zone) => {
+    if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
+    editorCloseTimerRef.current = null
+    selectedIdRef.current = zone.id
+    editorOpenRef.current = true
+    setEditorClosing(false)
+    setSelectedId(zone.id)
+    setDraft({ name: zone.name, color: zone.color })
+    setEditorOpen(true)
+  }
+
+  const handleZoneTap = (zone: Zone) => {
+    if (import.meta.env.DEV) {
+      console.info('[HomeStock Zone]', {
+        id: zone.id,
+        name: zone.name,
+        items: zone.items,
+        polygonPointCount: zone.polygon.points.length,
+        zone
+      })
+    }
+    if (!isEditing) {
+      focusZoneNormally(zone)
+      return
+    }
+
+    if (selectedIdRef.current === zone.id && editorOpenRef.current) {
+      closeEditor(true)
+      return
+    }
+    openEditor(zone)
+  }
+
   const handleMapClick = (event: MouseEvent<HTMLDivElement>) => {
     if ((event.target as Element).closest('.room')) return
     if (movedRef.current) return
+    selectedIdRef.current = null
     setSelectedId(null)
   }
 
   const showFullMap = () => {
     const fit = getFitTransform()
     if (!fit) return
+    selectedIdRef.current = null
     setSelectedId(null)
     animateTransform(fit)
   }
 
   const cancelEditingZone = () => {
-    setEditorClosing(true)
-    editorCloseTimerRef.current = window.setTimeout(() => {
-      setEditorOpen(false)
-      setEditorClosing(false)
-      setDraft(null)
-      editorCloseTimerRef.current = null
-    }, EDITOR_CLOSE_DURATION)
+    closeEditor(false)
   }
 
   const saveEditingZone = () => {
@@ -545,26 +566,33 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                       fill={preview?.color ?? zone.color}
                       onClick={() => {
                         if (movedRef.current) return
-                        focusZone(zone)
+                        handleZoneTap(zone)
                       }}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault()
-                          focusZone(zone)
+                          handleZoneTap(zone)
                         }
                       }}
                     />
-                    <text
-                      aria-hidden="true"
-                      className={selectedId === zone.id ? 'zone-label selected' : 'zone-label'}
-                      style={labelStyle}
-                      x={centroid.x}
-                      y={centroid.y}
+                    <g
+                      className="zone-label-position"
+                      transform={`translate(${centroid.x} ${centroid.y})`}
                     >
-                      {getZoneLabel(displayName, bounds.width, labelFontSize)}
-                    </text>
+                      <g className="zone-label-scale">
+                        <text
+                          aria-hidden="true"
+                          className={selectedId === zone.id ? 'zone-label selected' : 'zone-label'}
+                          style={labelStyle}
+                          x="0"
+                          y="0"
+                        >
+                          {getZoneLabel(displayName, bounds.width, labelFontSize)}
+                        </text>
+                      </g>
+                    </g>
                   </g>
                 )
               })}
