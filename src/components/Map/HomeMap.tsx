@@ -1,4 +1,4 @@
-import {
+﻿import {
   useCallback,
   useEffect,
   useRef,
@@ -8,9 +8,13 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react'
 import { createDefaultZones } from '../../data/defaultZones'
+import { itemRepository } from '../../repositories/ItemRepository'
 import { zoneRepository } from '../../repositories/ZoneRepository'
+import { itemService } from '../../services/ItemService'
 import { MAX_ZONE_NAME_LENGTH, zoneService } from '../../services/ZoneService'
+import type { CreateItemInput, Item } from '../../types/item'
 import type { Point, Zone } from '../../types/zone'
+import { ItemCreateSheet } from '../ItemCreate/ItemCreateSheet'
 import {
   ZoneEditorSheet,
   type ZoneDraft
@@ -47,10 +51,13 @@ interface StoredMapView extends Transform {
 const STORAGE_KEY = 'homestock:map-view'
 const STORAGE_VERSION = 1
 const VIEW_PADDING = 20
-const FOCUS_PADDING = 36
+const FOCUS_PADDING = 20
+const DETAIL_SHEET_CLEARANCE = 230
 const DRAG_THRESHOLD = 7
 const ANIMATION_DURATION = 280
 const EDITOR_CLOSE_DURATION = 160
+
+type SheetMode = 'closed' | 'zoneDetail' | 'itemList' | 'itemCreate' | 'zoneEdit'
 
 function getDistance(a: PointerEvent, b: PointerEvent) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
@@ -151,13 +158,13 @@ interface HomeMapProps {
 
 export function HomeMap({ isEditing }: HomeMapProps) {
   const [zones, setZones] = useState<Zone[]>(() => createDefaultZones())
+  const [items, setItems] = useState<Item[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [editorOpen, setEditorOpen] = useState(false)
+  const [sheetMode, setSheetMode] = useState<SheetMode>('closed')
   const [editorClosing, setEditorClosing] = useState(false)
-  const [detailOpen, setDetailOpen] = useState(false)
   const [draft, setDraft] = useState<ZoneDraft | null>(null)
   const selectedIdRef = useRef<string | null>(null)
-  const editorOpenRef = useRef(false)
+  const sheetModeRef = useRef<SheetMode>('closed')
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
@@ -170,6 +177,11 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const pendingTransformRef = useRef<Transform | null>(null)
   const movedRef = useRef(false)
   const initializedRef = useRef(false)
+
+  const updateSheetMode = useCallback((mode: SheetMode) => {
+    sheetModeRef.current = mode
+    setSheetMode(mode)
+  }, [])
 
   const getMetrics = useCallback((): MapMetrics | null => {
     const viewport = viewportRef.current
@@ -283,20 +295,20 @@ export function HomeMap({ isEditing }: HomeMapProps) {
 
   useEffect(() => {
     setZones(zoneRepository.load())
+    setItems(itemRepository.load())
   }, [])
 
   useEffect(() => {
     if (isEditing) {
-      setDetailOpen(false)
+      if (sheetModeRef.current !== 'zoneEdit') updateSheetMode('closed')
       return
     }
     if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
     editorCloseTimerRef.current = null
-    editorOpenRef.current = false
-    setEditorOpen(false)
+    updateSheetMode('closed')
     setEditorClosing(false)
     setDraft(null)
-  }, [isEditing])
+  }, [isEditing, updateSheetMode])
 
   useEffect(() => {
     const initialize = () => {
@@ -368,6 +380,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (sheetModeRef.current === 'itemCreate') return
     stopAnimation()
     event.currentTarget.setPointerCapture(event.pointerId)
     pointersRef.current.set(event.pointerId, event.nativeEvent)
@@ -420,11 +433,6 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }
 
   const focusZoneNormally = (zone: Zone) => {
-    setDetailOpen(true)
-    if (selectedIdRef.current === zone.id) return
-    selectedIdRef.current = zone.id
-    setSelectedId(zone.id)
-
     const metrics = getMetrics()
     const viewport = viewportRef.current
     const stage = stageRef.current
@@ -432,29 +440,38 @@ export function HomeMap({ isEditing }: HomeMapProps) {
 
     const bounds = getBounds(zone)
     const unitScale = metrics.stageWidth / 560
-    const roomFitScale = Math.min(
-      (metrics.viewportWidth - FOCUS_PADDING * 2) / (bounds.width * unitScale),
-      (metrics.viewportHeight - FOCUS_PADDING * 2) / (bounds.height * unitScale),
-      metrics.maxScale
-    )
-    const readableScale = Math.min(
-      metrics.maxScale,
-      Math.max(metrics.fitScale, 116 / (Math.min(bounds.width, bounds.height) * unitScale))
-    )
-    const nextScale = Math.min(roomFitScale, Math.max(transformRef.current.scale, readableScale))
+    const current = transformRef.current
+    const focusMaxScale = Math.min(metrics.maxScale, metrics.fitScale * 1.25)
+    const nextScale = current.scale <= metrics.fitScale * 1.08
+      ? Math.min(focusMaxScale, Math.max(current.scale, metrics.fitScale * 1.16))
+      : current.scale
     const stageRect = stage.getBoundingClientRect()
     const applied = appliedTransformRef.current
     const baseLeft = stageRect.left - applied.x
     const baseTop = stageRect.top - applied.y
     const viewportRect = viewport.getBoundingClientRect()
-    const targetX = viewportRect.left + metrics.viewportWidth / 2 - baseLeft
-    const targetY = viewportRect.top + metrics.viewportHeight / 2 - baseTop
     const roomCenterX = ((bounds.left + bounds.right) / 2) * unitScale
     const roomCenterY = ((bounds.top + bounds.bottom) / 2) * unitScale
+    let nextX = current.x + roomCenterX * (current.scale - nextScale)
+    let nextY = current.y + roomCenterY * (current.scale - nextScale)
+
+    const safeLeft = viewportRect.left + FOCUS_PADDING
+    const safeRight = viewportRect.right - FOCUS_PADDING
+    const safeTop = viewportRect.top + FOCUS_PADDING
+    const safeBottom = Math.max(safeTop + 80, viewportRect.bottom - DETAIL_SHEET_CLEARANCE)
+    const roomLeft = baseLeft + nextX + bounds.left * unitScale * nextScale
+    const roomRight = baseLeft + nextX + bounds.right * unitScale * nextScale
+    const roomTop = baseTop + nextY + bounds.top * unitScale * nextScale
+    const roomBottom = baseTop + nextY + bounds.bottom * unitScale * nextScale
+
+    if (roomLeft < safeLeft) nextX += safeLeft - roomLeft
+    else if (roomRight > safeRight) nextX += safeRight - roomRight
+    if (roomTop < safeTop) nextY += safeTop - roomTop
+    else if (roomBottom > safeBottom) nextY += safeBottom - roomBottom
 
     animateTransform({
-      x: targetX - roomCenterX * nextScale,
-      y: targetY - roomCenterY * nextScale,
+      x: nextX,
+      y: nextY,
       scale: nextScale
     })
   }
@@ -467,8 +484,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     }
     setEditorClosing(true)
     editorCloseTimerRef.current = window.setTimeout(() => {
-      editorOpenRef.current = false
-      setEditorOpen(false)
+      updateSheetMode('closed')
       setEditorClosing(false)
       setDraft(null)
       editorCloseTimerRef.current = null
@@ -479,12 +495,10 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
     editorCloseTimerRef.current = null
     selectedIdRef.current = zone.id
-    editorOpenRef.current = true
     setEditorClosing(false)
     setSelectedId(zone.id)
     setDraft({ name: zone.name, color: zone.color })
-    setEditorOpen(true)
-    setDetailOpen(false)
+    updateSheetMode('zoneEdit')
   }
 
   const handleZoneTap = (zone: Zone) => {
@@ -498,11 +512,24 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       })
     }
     if (!isEditing) {
+      if (sheetModeRef.current === 'itemCreate') return
+      if (
+        selectedIdRef.current === zone.id &&
+        (sheetModeRef.current === 'zoneDetail' || sheetModeRef.current === 'itemList')
+      ) {
+        selectedIdRef.current = null
+        setSelectedId(null)
+        updateSheetMode('closed')
+        return
+      }
+      selectedIdRef.current = zone.id
+      setSelectedId(zone.id)
+      updateSheetMode('zoneDetail')
       focusZoneNormally(zone)
       return
     }
 
-    if (selectedIdRef.current === zone.id && editorOpenRef.current) {
+    if (selectedIdRef.current === zone.id && sheetModeRef.current === 'zoneEdit') {
       closeEditor(true)
       return
     }
@@ -514,7 +541,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     if (movedRef.current) return
     selectedIdRef.current = null
     setSelectedId(null)
-    setDetailOpen(false)
+    updateSheetMode('closed')
   }
 
   const showFullMap = () => {
@@ -522,7 +549,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     if (!fit) return
     selectedIdRef.current = null
     setSelectedId(null)
-    setDetailOpen(false)
+    updateSheetMode('closed')
     animateTransform(fit)
   }
 
@@ -548,19 +575,24 @@ export function HomeMap({ isEditing }: HomeMapProps) {
     cancelEditingZone()
   }
 
-  const activeDraftZoneId = editorOpen ? selectedId : null
+  const saveItem = (input: CreateItemInput) => {
+    itemService.createItem(input)
+    setItems(itemRepository.getAllItems())
+    setZones(zoneRepository.getAllZones())
+    updateSheetMode('zoneDetail')
+  }
+
+  const activeDraftZoneId = sheetMode === 'zoneEdit' ? selectedId : null
   const selectedZone = findZoneById(zones, selectedId)
-  const sectionClassName = editorOpen
+  const selectedItems = selectedId ? items.filter((item) => item.zoneId === selectedId) : []
+  const sectionClassName = sheetMode === 'zoneEdit' || sheetMode === 'itemCreate'
     ? 'map-section map-section--editor-open'
-    : detailOpen
+    : sheetMode === 'zoneDetail' || sheetMode === 'itemList'
       ? 'map-section map-section--detail-open'
       : 'map-section'
 
   return (
-    <section
-      className={sectionClassName}
-      aria-label="집 공간 지도"
-    >
+    <section className={sectionClassName} aria-label="집 공간 지도">
       <div
         className="map-viewport"
         onClick={handleMapClick}
@@ -579,9 +611,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                 const displayName = preview?.name.trim() || zone.name
                 const centroid = getPolygonCentroid(zone.polygon.points)
                 const labelFontSize = getLabelFontSize(bounds.width, bounds.height)
-                const labelStyle = {
-                  '--zone-label-size': `${labelFontSize}px`
-                } as CSSProperties
+                const labelStyle = { '--zone-label-size': `${labelFontSize}px` } as CSSProperties
                 return (
                   <g className="zone" key={zone.id}>
                     <path
@@ -589,10 +619,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                       className={selectedId === zone.id ? 'room selected' : 'room'}
                       d={roundedPolygonPath(zone.polygon.points, zone.polygon.cornerRadius)}
                       fill={preview?.color ?? zone.color}
-                      onClick={() => {
-                        if (movedRef.current) return
-                        handleZoneTap(zone)
-                      }}
+                      onClick={() => { if (!movedRef.current) handleZoneTap(zone) }}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(event) => {
@@ -602,10 +629,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                         }
                       }}
                     />
-                    <g
-                      className="zone-label-position"
-                      transform={`translate(${centroid.x} ${centroid.y})`}
-                    >
+                    <g className="zone-label-position" transform={`translate(${centroid.x} ${centroid.y})`}>
                       <g className="zone-label-scale">
                         <text
                           aria-hidden="true"
@@ -629,7 +653,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
         <button
           className="fit-map-button"
           type="button"
-          aria-label="집 전체 지도 보기"
+          aria-label="지도 전체 보기"
           onClick={showFullMap}
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -639,10 +663,8 @@ export function HomeMap({ isEditing }: HomeMapProps) {
           </svg>
         </button>
       </div>
-      <p className="gesture-hint" aria-hidden="true">
-        한 손가락으로 이동 · 두 손가락으로 확대
-      </p>
-      {isEditing && editorOpen && draft && (
+      <p className="gesture-hint" aria-hidden="true">한 손가락으로 이동 · 두 손가락으로 확대</p>
+      {isEditing && sheetMode === 'zoneEdit' && draft && (
         <ZoneEditorSheet
           draft={draft}
           isClosing={editorClosing}
@@ -652,8 +674,24 @@ export function HomeMap({ isEditing }: HomeMapProps) {
           onSave={saveEditingZone}
         />
       )}
-      {!isEditing && detailOpen && selectedZone && (
-        <ZoneDetailSheet key={selectedZone.id} zone={selectedZone} />
+      {!isEditing && (sheetMode === 'zoneDetail' || sheetMode === 'itemList') && selectedZone && (
+        <ZoneDetailSheet
+          items={selectedItems}
+          key={selectedZone.id}
+          onAddItem={() => updateSheetMode('itemCreate')}
+          onBack={() => updateSheetMode('zoneDetail')}
+          onViewItems={() => updateSheetMode('itemList')}
+          view={sheetMode === 'itemList' ? 'items' : 'detail'}
+          zone={selectedZone}
+        />
+      )}
+      {!isEditing && sheetMode === 'itemCreate' && selectedZone && (
+        <ItemCreateSheet
+          key={selectedZone.id}
+          onCancel={() => updateSheetMode('zoneDetail')}
+          onSave={saveItem}
+          zone={selectedZone}
+        />
       )}
     </section>
   )
