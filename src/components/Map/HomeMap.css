@@ -61,24 +61,26 @@
 }
 
 .zone-label {
-  fill: #555550;
+  fill: #686863;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  paint-order: stroke;
+  font-size: var(--zone-label-size, 12px);
+  font-weight: 500;
+  letter-spacing: -0.02em;
   pointer-events: none;
-  stroke: rgba(255, 255, 255, 0.28);
-  stroke-width: 0.8px;
   text-anchor: middle;
+  dominant-baseline: central;
+  opacity: 0.74;
   transform: scale(var(--label-inverse-scale));
   transform-box: fill-box;
   transform-origin: center;
+  transition: fill 120ms ease, font-size 120ms ease, opacity 120ms ease;
   user-select: none;
 }
 
 .zone-label.selected {
-  fill: #42423e;
+  fill: #4c4c48;
+  font-size: calc(var(--zone-label-size, 12px) * 1.06);
+  opacity: 0.94;
 }
 
 .gesture-hint {
@@ -154,6 +156,7 @@
 @media (prefers-reduced-motion: reduce) {
   .map-stage--animating,
   .map-stage--animating .zone-label,
+  .zone-label,
   .room {
     transition: none;
   }

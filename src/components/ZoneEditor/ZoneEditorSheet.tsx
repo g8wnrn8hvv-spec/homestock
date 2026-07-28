@@ -8,6 +8,7 @@ export interface ZoneDraft {
 
 interface ZoneEditorSheetProps {
   draft: ZoneDraft
+  isClosing: boolean
   maxNameLength: number
   onCancel: () => void
   onChange: (draft: ZoneDraft) => void
@@ -27,6 +28,7 @@ export const ZONE_COLORS = [
 
 export function ZoneEditorSheet({
   draft,
+  isClosing,
   maxNameLength,
   onCancel,
   onChange,
@@ -38,7 +40,7 @@ export function ZoneEditorSheet({
   return (
     <aside
       aria-label="구역 편집"
-      className="zone-editor-sheet"
+      className={isClosing ? 'zone-editor-sheet zone-editor-sheet--closing' : 'zone-editor-sheet'}
       onClick={stopPropagation}
       onPointerDown={stopPropagation}
       onPointerMove={stopPropagation}

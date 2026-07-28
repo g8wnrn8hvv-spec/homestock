@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent
 } from 'react'
@@ -48,6 +49,7 @@ const VIEW_PADDING = 20
 const FOCUS_PADDING = 36
 const DRAG_THRESHOLD = 7
 const ANIMATION_DURATION = 280
+const EDITOR_CLOSE_DURATION = 160
 
 function getDistance(a: PointerEvent, b: PointerEvent) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
@@ -97,8 +99,38 @@ function getBounds(zone: Zone) {
   return { left, right, top, bottom, width: right - left, height: bottom - top }
 }
 
-function getZoneLabel(name: string, width: number) {
-  const maxCharacters = Math.max(2, Math.floor(width / 18))
+function getPolygonCentroid(points: Point[]): Point {
+  let crossSum = 0
+  let xSum = 0
+  let ySum = 0
+
+  points.forEach((point, index) => {
+    const next = points[(index + 1) % points.length]
+    const cross = point.x * next.y - next.x * point.y
+    crossSum += cross
+    xSum += (point.x + next.x) * cross
+    ySum += (point.y + next.y) * cross
+  })
+
+  if (Math.abs(crossSum) < Number.EPSILON) {
+    return {
+      x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+      y: points.reduce((sum, point) => sum + point.y, 0) / points.length
+    }
+  }
+
+  return {
+    x: xSum / (3 * crossSum),
+    y: ySum / (3 * crossSum)
+  }
+}
+
+function getLabelFontSize(width: number, height: number) {
+  return Math.min(12.5, Math.max(9.5, Math.min(width, height) / 6.5))
+}
+
+function getZoneLabel(name: string, width: number, fontSize: number) {
+  const maxCharacters = Math.max(2, Math.floor(width / (fontSize * 0.85)))
   return name.length > maxCharacters ? `${name.slice(0, maxCharacters)}…` : name
 }
 
@@ -110,6 +142,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const [zones, setZones] = useState<Zone[]>(() => createDefaultZones())
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
+  const [editorClosing, setEditorClosing] = useState(false)
   const [draft, setDraft] = useState<ZoneDraft | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -119,6 +152,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   const gestureRef = useRef<Gesture | null>(null)
   const frameRef = useRef<number | null>(null)
   const animationTimerRef = useRef<number | null>(null)
+  const editorCloseTimerRef = useRef<number | null>(null)
   const pendingTransformRef = useRef<Transform | null>(null)
   const movedRef = useRef(false)
   const initializedRef = useRef(false)
@@ -240,6 +274,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   useEffect(() => {
     if (isEditing) return
     setEditorOpen(false)
+    setEditorClosing(false)
     setDraft(null)
   }, [isEditing])
 
@@ -289,6 +324,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       observer.disconnect()
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
       if (animationTimerRef.current !== null) window.clearTimeout(animationTimerRef.current)
+      if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
     }
   }, [applyTransform, getFitTransform, getMetrics])
 
@@ -374,6 +410,20 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       })
     }
     if (isEditing) {
+      if (selectedId === zone.id && editorOpen) {
+        setSelectedId(null)
+        setEditorClosing(true)
+        editorCloseTimerRef.current = window.setTimeout(() => {
+          setEditorOpen(false)
+          setEditorClosing(false)
+          setDraft(null)
+          editorCloseTimerRef.current = null
+        }, EDITOR_CLOSE_DURATION)
+        return
+      }
+      if (editorCloseTimerRef.current !== null) window.clearTimeout(editorCloseTimerRef.current)
+      editorCloseTimerRef.current = null
+      setEditorClosing(false)
       setSelectedId(zone.id)
       setDraft({ name: zone.name, color: zone.color })
       setEditorOpen(true)
@@ -431,8 +481,13 @@ export function HomeMap({ isEditing }: HomeMapProps) {
   }
 
   const cancelEditingZone = () => {
-    setEditorOpen(false)
-    setDraft(null)
+    setEditorClosing(true)
+    editorCloseTimerRef.current = window.setTimeout(() => {
+      setEditorOpen(false)
+      setEditorClosing(false)
+      setDraft(null)
+      editorCloseTimerRef.current = null
+    }, EDITOR_CLOSE_DURATION)
   }
 
   const saveEditingZone = () => {
@@ -450,8 +505,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       zoneService.changeColor(selectedId, draft.color)
     }
     setZones(zoneRepository.getAllZones())
-    setEditorOpen(false)
-    setDraft(null)
+    cancelEditingZone()
   }
 
   const activeDraftZoneId = editorOpen ? selectedId : null
@@ -477,7 +531,11 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                 const bounds = getBounds(zone)
                 const preview = activeDraftZoneId === zone.id && draft ? draft : null
                 const displayName = preview?.name.trim() || zone.name
-                const showLabel = bounds.width >= 78 && bounds.height >= 48
+                const centroid = getPolygonCentroid(zone.polygon.points)
+                const labelFontSize = getLabelFontSize(bounds.width, bounds.height)
+                const labelStyle = {
+                  '--zone-label-size': `${labelFontSize}px`
+                } as CSSProperties
                 return (
                   <g className="zone" key={zone.id}>
                     <path
@@ -498,16 +556,15 @@ export function HomeMap({ isEditing }: HomeMapProps) {
                         }
                       }}
                     />
-                    {showLabel && (
-                      <text
-                        aria-hidden="true"
-                        className={selectedId === zone.id ? 'zone-label selected' : 'zone-label'}
-                        x={(bounds.left + bounds.right) / 2}
-                        y={(bounds.top + bounds.bottom) / 2}
-                      >
-                        {getZoneLabel(displayName, bounds.width)}
-                      </text>
-                    )}
+                    <text
+                      aria-hidden="true"
+                      className={selectedId === zone.id ? 'zone-label selected' : 'zone-label'}
+                      style={labelStyle}
+                      x={centroid.x}
+                      y={centroid.y}
+                    >
+                      {getZoneLabel(displayName, bounds.width, labelFontSize)}
+                    </text>
                   </g>
                 )
               })}
@@ -535,6 +592,7 @@ export function HomeMap({ isEditing }: HomeMapProps) {
       {isEditing && editorOpen && draft && (
         <ZoneEditorSheet
           draft={draft}
+          isClosing={editorClosing}
           maxNameLength={MAX_ZONE_NAME_LENGTH}
           onCancel={cancelEditingZone}
           onChange={setDraft}
